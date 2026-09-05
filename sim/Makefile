@@ -30,7 +30,7 @@ BIN   := obj_dir/$(TOP)
 PROG  ?= test-basic
 FLAGS := --binary --timing --assert --timescale 1ns/1ps -Wno-DECLFILENAME
 
-.PHONY: all run trace waves lint clean
+.PHONY: all run trace waves lint bus-lint bus-test clean
 all: run
 
 $(PROG).hex: $(PROG).s asm.py
@@ -52,6 +52,23 @@ waves: $(SRCS) $(PROG).hex
 lint:
 	$(VERILATOR) --lint-only --timescale 1ns/1ps --top-module cpu_core \
 	  $(filter-out tb-core.sv,$(SRCS))
+
+BUS_SRCS := ../rtl/bus/mem-if.sv \
+            ../rtl/bus/shared-interconnect.sv \
+            ../rtl/memory/sync-memory.sv \
+            bus/tb-shared-interconnect.sv
+
+bus-test:
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps \
+	  --top-module tb_shared_interconnect -o tb_shared_interconnect $(BUS_SRCS)
+	./obj_dir/tb_shared_interconnect
+
+bus-lint:
+	$(VERILATOR) --lint-only --assert --timescale 1ns/1ps \
+	  --top-module shared_interconnect \
+	  ../rtl/bus/mem-if.sv \
+	  ../rtl/bus/shared-interconnect.sv \
+	  ../rtl/memory/sync-memory.sv
 
 clean:
 	rm -rf obj_dir *.hex *.vcd

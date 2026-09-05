@@ -5,8 +5,8 @@ Will use RV32I ISA, everything coded in SystemVerilog
 ## Todo list
 
 - [x] Baseline multicycle core (5-state FSM, one instruction in flight)
-- [ ] Single CPU pipelined 5-stage core (IF, ID, EX, MEM, WB)
-- [ ] Multi-level cache hierarchy / interconnects
+- [x] Single CPU pipelined 5-stage core (IF, ID, EX, MEM, WB)
+- [x] Multi-level cache hierarchy / interconnects
 - [ ] Implement Pipeline Interrupts
 - [ ] Implement an integrated GPU
 - [ ] Connect the CPU and GPU

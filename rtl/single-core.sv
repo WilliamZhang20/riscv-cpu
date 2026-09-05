@@ -1,19 +1,6 @@
 // ============================================================================
-// cpu_core -- baseline multicycle RV32I core.
+// cpu_core -- five-stage pipelined RV32I core.
 //
-// One instruction in flight, walked through five states:
-//
-//   IF  : imem_addr = pc, latch the fetched word into ir
-//   ID  : decode ir, read rs1/rs2, generate imm, latch operands
-//   EX  : ALU result and branch decision -> alu_q, take_q, target_q
-//   MEM : data-memory access (stores commit here, loads latch into load_q)
-//   WB  : register write and PC update
-//
-// This is deliberately NOT pipelined. Every state boundary here becomes a
-// pipeline register later; the datapath and control below do not change when
-// it is cut, which is the whole reason to build this shape first.
-//
-// Memories are asynchronous-read "magic" memories -- no stall handshake yet.
 // ============================================================================
 module cpu_core
   import rv32i_pkg::*;
@@ -43,43 +30,115 @@ module cpu_core
 );
 
   // --------------------------------------------------------------------------
-  // FSM
+  // Pipeline registers
   // --------------------------------------------------------------------------
-  typedef enum logic [2:0] {
-    S_IF  = 3'd0,
-    S_ID  = 3'd1,
-    S_EX  = 3'd2,
-    S_MEM = 3'd3,
-    S_WB  = 3'd4,
-    S_HLT = 3'd5
-  } state_e;
 
-  state_e state, state_n;
+  // IF -> ID
+  typedef struct packed {
+    logic            valid;
+    logic [XLEN-1:0] pc;
+    logic [XLEN-1:0] instr;
+  } if_id_reg_t;
 
-  // --------------------------------------------------------------------------
-  // Sequential state carried between states
-  // --------------------------------------------------------------------------
-  logic [XLEN-1:0] ir;         // fetched instruction
-  logic [XLEN-1:0] rs1_q;      // operands latched at end of ID
-  logic [XLEN-1:0] rs2_q;
-  logic [XLEN-1:0] imm_q;
-  logic [XLEN-1:0] alu_q;      // ALU result latched at end of EX
-  logic            take_q;     // branch/jump decision latched at end of EX
-  logic [XLEN-1:0] target_q;   // branch/jump target latched at end of EX
-  logic [XLEN-1:0] load_q;     // formatted load data latched at end of MEM
-  logic            illegal_q;
+  if_id_reg_t if_id_q, if_id_n;
+
+
+  // ID -> EX
+  typedef struct packed {
+    logic            valid;
+
+    logic [XLEN-1:0] pc;
+    logic [XLEN-1:0] instr;
+
+    // Register operands
+    logic [XLEN-1:0] rs1_data;
+    logic [XLEN-1:0] rs2_data;
+
+    // Register indices
+    logic [4:0]      rs1_addr;
+    logic [4:0]      rs2_addr;
+    logic [4:0]      rd_addr;
+
+    // Immediate
+    logic [XLEN-1:0] imm;
+
+    // Decoded control
+    decoded_t        d;
+  } id_ex_reg_t;
+
+  id_ex_reg_t id_ex_q, id_ex_n;
+
+
+  // EX -> MEM
+  typedef struct packed {
+    logic            valid;
+
+    logic [XLEN-1:0] pc;
+    logic [XLEN-1:0] instr;
+
+    logic [XLEN-1:0] alu_result;
+    logic [XLEN-1:0] rs2_data;     // needed for stores
+
+    logic [4:0]      rs2_addr;     // needed for WB -> MEM store forwarding
+    logic [4:0]      rd_addr;
+
+    logic            branch_take;
+    logic [XLEN-1:0] branch_target;
+
+    // Carry control needed by MEM/WB
+    decoded_t        d;
+  } ex_mem_reg_t;
+
+  ex_mem_reg_t ex_mem_q, ex_mem_n;
+
+
+  // MEM -> WB
+  typedef struct packed {
+    logic            valid;
+
+    logic [XLEN-1:0] pc;
+    logic [XLEN-1:0] instr;
+
+    logic [XLEN-1:0] alu_result;
+    logic [XLEN-1:0] load_data;
+
+    logic [4:0]      rd_addr;
+
+    // Carry writeback control
+    decoded_t        d;
+  } mem_wb_reg_t;
+
+  mem_wb_reg_t mem_wb_q, mem_wb_n;
 
   // --------------------------------------------------------------------------
   // PC
   // --------------------------------------------------------------------------
   logic [XLEN-1:0] pc, next_pc;
   logic            pc_en;
+  logic            ex_redirect;
+  logic [XLEN-1:0] ex_target;
+  logic            frontend_stop;
+  logic            load_use_stall;
+  logic            halted_q, trap_illegal_q;
 
-  assign pc_en = (state == S_WB) && !illegal_q;
-
-  // Jump targets: JALR clears bit 0 of rs1+imm (spec Vol I, sec. 2.5.1);
-  // JAL and branches are inherently even.
-  assign next_pc = take_q ? target_q : (pc + 32'd4);
+  assign ex_redirect   = id_ex_q.valid && !id_ex_q.d.illegal &&
+                         !id_ex_q.d.halt && branch_take;
+  assign ex_target     = (id_ex_q.d.br_op == BR_JALR)
+                       ? {alu_result[XLEN-1:1], 1'b0} : alu_result;
+  assign frontend_stop = halted_q ||
+                         (if_id_q.valid && (d.illegal || d.halt)) ||
+                         (id_ex_q.valid &&
+                          (id_ex_q.d.illegal || id_ex_q.d.halt)) ||
+                         (ex_mem_q.valid &&
+                          (ex_mem_q.d.illegal || ex_mem_q.d.halt)) ||
+                         (mem_wb_q.valid &&
+                          (mem_wb_q.d.illegal || mem_wb_q.d.halt));
+  assign load_use_stall = id_ex_q.valid && id_ex_q.d.mem_read &&
+                          (id_ex_q.rd_addr != '0) && if_id_q.valid &&
+                          ((id_ex_q.rd_addr == d.rs1_addr) ||
+                           (id_ex_q.rd_addr == d.rs2_addr));
+  assign pc_en         = ex_redirect || (!frontend_stop && !load_use_stall);
+  assign next_pc       = ex_redirect ? ex_target : (pc + 32'd4);
 
   program_counter #(.RESET_PC(RESET_PC)) u_pc (
       .clk     (clk),
@@ -103,12 +162,12 @@ module cpu_core
   logic [XLEN-1:0] rf_wdata;
 
   control_unit u_dec (
-      .instr (ir),
+      .instr (if_id_q.instr),
       .d     (d)
   );
 
   imm_gen u_imm (
-      .instr (ir),
+      .instr (if_id_q.instr),
       .sel   (d.imm_sel),
       .imm   (imm)
   );
@@ -120,7 +179,7 @@ module cpu_core
       .rs2_addr (d.rs2_addr),
       .rs2_data (rs2_data),
       .rd_we    (rf_we),
-      .rd_addr  (d.rd_addr),
+      .rd_addr  (mem_wb_q.rd_addr),
       .rd_data  (rf_wdata)
   );
 
@@ -128,29 +187,79 @@ module cpu_core
   // EX: ALU + branch condition
   // --------------------------------------------------------------------------
   logic [XLEN-1:0] alu_a, alu_b, alu_result;
+  logic [XLEN-1:0] ex_rs1_data, ex_rs2_data;
+  logic [XLEN-1:0] ex_mem_fwd_data;
+  logic [XLEN-1:0] mem_store_data;
   logic            branch_take;
+  logic            wb_fwd_valid;
+
+  assign wb_fwd_valid = mem_wb_q.valid && mem_wb_q.d.rd_we &&
+                        !mem_wb_q.d.illegal && !mem_wb_q.d.halt &&
+                        !halted_q;
+
+  // EX/MEM can forward every result except a load; load-use dependencies are
+  // stalled for one cycle and then use the MEM/WB forwarding path. This is
+  // the writeback-to-execute (WX) path.
+  assign ex_mem_fwd_data = (ex_mem_q.d.wb_sel == WB_PC4)
+                         ? ex_mem_q.pc + 32'd4 : ex_mem_q.alu_result;
 
   always_comb begin
-    unique case (d.a_sel)
-      A_PC:    alu_a = pc;
+    ex_rs1_data = id_ex_q.rs1_data;
+    if (ex_mem_q.valid && ex_mem_q.d.rd_we && !ex_mem_q.d.mem_read &&
+        (ex_mem_q.rd_addr != '0) &&
+        (ex_mem_q.rd_addr == id_ex_q.rs1_addr))
+      ex_rs1_data = ex_mem_fwd_data;
+    else if (wb_fwd_valid &&
+             (mem_wb_q.rd_addr != '0) &&
+             (mem_wb_q.rd_addr == id_ex_q.rs1_addr))
+      ex_rs1_data = rf_wdata;
+
+    ex_rs2_data = id_ex_q.rs2_data;
+    if (ex_mem_q.valid && ex_mem_q.d.rd_we && !ex_mem_q.d.mem_read &&
+        (ex_mem_q.rd_addr != '0) &&
+        (ex_mem_q.rd_addr == id_ex_q.rs2_addr))
+      ex_rs2_data = ex_mem_fwd_data;
+    else if (wb_fwd_valid &&
+             (mem_wb_q.rd_addr != '0) &&
+             (mem_wb_q.rd_addr == id_ex_q.rs2_addr))
+      ex_rs2_data = rf_wdata;
+  end
+
+  // A store's data is carried into MEM, where it may still be dependent on
+  // the instruction currently in WB. Forwarding here is the writeback-to-
+  // memory (WM) path. It also makes the store-data path independent of where
+  // the value was obtained in EX.
+  always_comb begin
+    mem_store_data = ex_mem_q.rs2_data;
+    if (ex_mem_q.valid && ex_mem_q.d.mem_write &&
+        wb_fwd_valid &&
+        (mem_wb_q.rd_addr != '0) &&
+        (mem_wb_q.rd_addr == ex_mem_q.rs2_addr))
+      mem_store_data = rf_wdata;
+  end
+
+  always_comb begin
+    unique case (id_ex_q.d.a_sel)
+      A_PC:    alu_a = id_ex_q.pc;
       A_ZERO:  alu_a = '0;
-      default: alu_a = rs1_q;
+      default: alu_a = ex_rs1_data;
     endcase
   end
 
-  assign alu_b = (d.b_sel == B_IMM) ? imm_q : rs2_q;
+  assign alu_b = (id_ex_q.d.b_sel == B_IMM) ? id_ex_q.imm
+                                             : ex_rs2_data;
 
   alu u_alu (
-      .op     (d.alu_op),
+      .op     (id_ex_q.d.alu_op),
       .a      (alu_a),
       .b      (alu_b),
       .result (alu_result)
   );
 
   branch_unit u_br (
-      .op       (d.br_op),
-      .rs1_data (rs1_q),
-      .rs2_data (rs2_q),
+      .op       (id_ex_q.d.br_op),
+      .rs1_data (ex_rs1_data),
+      .rs2_data (ex_rs2_data),
       .take     (branch_take)
   );
 
@@ -158,15 +267,16 @@ module cpu_core
   // MEM: address, byte enables, store alignment, load formatting
   // --------------------------------------------------------------------------
   logic [1:0] byte_off;
-  assign byte_off = alu_q[1:0];
+  assign byte_off = ex_mem_q.alu_result[1:0];
 
   // Full byte address on the bus: the memory ignores the low two bits, but the
   // testbench (and any real slave) needs them to check alignment.
-  assign dmem_addr = alu_q;
-  assign dmem_we   = (state == S_MEM) && d.mem_write && !illegal_q;
+  assign dmem_addr = ex_mem_q.alu_result;
+  assign dmem_we   = ex_mem_q.valid && ex_mem_q.d.mem_write &&
+                     !ex_mem_q.d.illegal && !halted_q;
 
   always_comb begin
-    unique case (d.mem_op)
+    unique case (ex_mem_q.d.mem_op)
       MEM_B:   dmem_be = 4'b0001 << byte_off;
       MEM_H:   dmem_be = byte_off[1] ? 4'b1100 : 4'b0011;
       default: dmem_be = 4'b1111;                          // MEM_W
@@ -175,10 +285,10 @@ module cpu_core
 
   // Replicate the store data into the lane the byte enables select.
   always_comb begin
-    unique case (d.mem_op)
-      MEM_B:   dmem_wdata = {4{rs2_q[7:0]}};
-      MEM_H:   dmem_wdata = {2{rs2_q[15:0]}};
-      default: dmem_wdata = rs2_q;                         // MEM_W
+    unique case (ex_mem_q.d.mem_op)
+      MEM_B:   dmem_wdata = {4{mem_store_data[7:0]}};
+      MEM_H:   dmem_wdata = {2{mem_store_data[15:0]}};
+      default: dmem_wdata = mem_store_data;                // MEM_W
     endcase
   end
 
@@ -189,7 +299,7 @@ module cpu_core
 
   logic [XLEN-1:0] load_data;
   always_comb begin
-    unique case (d.mem_op)
+    unique case (ex_mem_q.d.mem_op)
       MEM_B:   load_data = {{24{load_byte[7]}},  load_byte};
       MEM_BU:  load_data = {24'b0,               load_byte};
       MEM_H:   load_data = {{16{load_half[15]}}, load_half};
@@ -202,75 +312,94 @@ module cpu_core
   // WB
   // --------------------------------------------------------------------------
   always_comb begin
-    unique case (d.wb_sel)
-      WB_MEM:  rf_wdata = load_q;
-      WB_PC4:  rf_wdata = pc + 32'd4;
-      default: rf_wdata = alu_q;                           // WB_ALU, WB_CSR
+    unique case (mem_wb_q.d.wb_sel)
+      WB_MEM:  rf_wdata = mem_wb_q.load_data;
+      WB_PC4:  rf_wdata = mem_wb_q.pc + 32'd4;
+      default: rf_wdata = mem_wb_q.alu_result;             // WB_ALU, WB_CSR
     endcase
   end
 
-  assign rf_we = (state == S_WB) && d.rd_we && !illegal_q;
+  assign rf_we = mem_wb_q.valid && mem_wb_q.d.rd_we &&
+                 !mem_wb_q.d.illegal && !mem_wb_q.d.halt && !halted_q;
 
   // --------------------------------------------------------------------------
-  // Next-state logic
+  // Pipeline-register inputs
   // --------------------------------------------------------------------------
   always_comb begin
-    unique case (state)
-      S_IF:    state_n = S_ID;
-      S_ID:    state_n = (d.illegal || d.halt) ? S_HLT : S_EX;
-      S_EX:    state_n = S_MEM;
-      S_MEM:   state_n = S_WB;
-      S_WB:    state_n = S_IF;
-      default: state_n = S_HLT;
-    endcase
+    if_id_n  = '0;
+    id_ex_n  = '0;
+    ex_mem_n = '0;
+    mem_wb_n = '0;
+
+    if (load_use_stall && !ex_redirect) begin
+      if_id_n = if_id_q;
+    end else if (!frontend_stop && !ex_redirect) begin
+      if_id_n.valid = 1'b1;
+      if_id_n.pc    = pc;
+      if_id_n.instr = imem_rdata;
+    end
+
+    if (!ex_redirect && !load_use_stall) begin
+      id_ex_n.valid    = if_id_q.valid;
+      id_ex_n.pc       = if_id_q.pc;
+      id_ex_n.instr    = if_id_q.instr;
+      id_ex_n.rs1_data = rs1_data;
+      id_ex_n.rs2_data = rs2_data;
+      id_ex_n.rs1_addr = d.rs1_addr;
+      id_ex_n.rs2_addr = d.rs2_addr;
+      id_ex_n.rd_addr  = d.rd_addr;
+      id_ex_n.imm      = imm;
+      id_ex_n.d        = d;
+    end
+
+    ex_mem_n.valid         = id_ex_q.valid;
+    ex_mem_n.pc            = id_ex_q.pc;
+    ex_mem_n.instr         = id_ex_q.instr;
+    ex_mem_n.alu_result    = alu_result;
+    ex_mem_n.rs2_data      = ex_rs2_data;
+    ex_mem_n.rs2_addr      = id_ex_q.rs2_addr;
+    ex_mem_n.rd_addr       = id_ex_q.rd_addr;
+    ex_mem_n.branch_take   = branch_take;
+    ex_mem_n.branch_target = ex_target;
+    ex_mem_n.d             = id_ex_q.d;
+
+    mem_wb_n.valid      = ex_mem_q.valid;
+    mem_wb_n.pc         = ex_mem_q.pc;
+    mem_wb_n.instr      = ex_mem_q.instr;
+    mem_wb_n.alu_result = ex_mem_q.alu_result;
+    mem_wb_n.load_data  = load_data;
+    mem_wb_n.rd_addr    = ex_mem_q.rd_addr;
+    mem_wb_n.d          = ex_mem_q.d;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state     <= S_IF;
-      ir        <= NOP_INSTR;
-      rs1_q     <= '0;
-      rs2_q     <= '0;
-      imm_q     <= '0;
-      alu_q     <= '0;
-      take_q    <= 1'b0;
-      target_q  <= '0;
-      load_q    <= '0;
-      illegal_q <= 1'b0;
+        if_id_q  <= '0;
+        id_ex_q  <= '0;
+        ex_mem_q <= '0;
+        mem_wb_q <= '0;
+        halted_q       <= 1'b0;
+        trap_illegal_q <= 1'b0;
     end else begin
-      state <= state_n;
-
-      if (state == S_IF) begin
-        ir <= imem_rdata;
-      end
-
-      if (state == S_ID) begin
-        rs1_q     <= rs1_data;
-        rs2_q     <= rs2_data;
-        imm_q     <= imm;
-        illegal_q <= d.illegal;
-      end
-
-      if (state == S_EX) begin
-        alu_q    <= alu_result;
-        take_q   <= branch_take;
-        target_q <= (d.br_op == BR_JALR) ? {alu_result[XLEN-1:1], 1'b0}
-                                         : alu_result;
-      end
-
-      if (state == S_MEM) begin
-        load_q <= load_data;
-      end
+        if_id_q  <= if_id_n;
+        id_ex_q  <= id_ex_n;
+        ex_mem_q <= ex_mem_n;
+        mem_wb_q <= mem_wb_n;
+        if (mem_wb_q.valid && (mem_wb_q.d.halt || mem_wb_q.d.illegal)) begin
+          halted_q       <= 1'b1;
+          trap_illegal_q <= mem_wb_q.d.illegal;
+        end
     end
   end
 
   // --------------------------------------------------------------------------
   // Status / trace
   // --------------------------------------------------------------------------
-  assign halted       = (state == S_HLT);
-  assign trap_illegal = (state == S_HLT) && d.illegal;
-  assign retire       = (state == S_WB);
-  assign retire_pc    = pc;
-  assign retire_instr = ir;
+  assign halted       = halted_q;
+  assign trap_illegal = trap_illegal_q;
+  assign retire       = mem_wb_q.valid && !mem_wb_q.d.halt &&
+                        !mem_wb_q.d.illegal && !halted_q;
+  assign retire_pc    = mem_wb_q.pc;
+  assign retire_instr = mem_wb_q.instr;
 
 endmodule : cpu_core

@@ -1,5 +1,5 @@
 // ============================================================================
-// tb_core -- self-checking testbench for the baseline multicycle core.
+// tb_core -- self-checking testbench for the pipelined core.
 //
 //   $ verilator --binary --timing --assert --top-module tb_core \
 //         ../rtl/rv32i-pkg.sv ../rtl/*.sv tb-core.sv
@@ -108,10 +108,11 @@ module tb_core;
   // RV32I requires naturally-aligned data accesses unless the implementation
   // explicitly supports misaligned ones; this core does not.
   always_ff @(posedge clk) begin
-    if (rst_n && (dmem_we || dut.d.mem_read) && (dut.state == dut.S_MEM)) begin
+    if (rst_n && dut.ex_mem_q.valid &&
+        (dut.ex_mem_q.d.mem_write || dut.ex_mem_q.d.mem_read)) begin
       if (dmem_addr >= MEM_WORDS * 4)
         $fatal(1, "FAIL: data access out of range: %08h", dmem_addr);
-      case (dut.d.mem_op)
+      case (dut.ex_mem_q.d.mem_op)
         MEM_W:
           if (dmem_addr[1:0] != 2'b00)
             $fatal(1, "FAIL: misaligned word access: %08h", dmem_addr);
