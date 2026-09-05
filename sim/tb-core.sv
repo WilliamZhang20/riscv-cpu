@@ -24,7 +24,9 @@ module tb_core;
   mem_if core_imem_if(clk, rst_n);
   mem_if core_dmem_if(clk, rst_n);
   mem_if fabric_if [2](clk, rst_n);
+  mem_if l2_if [1](clk, rst_n);
   mem_if memory_if [1](clk, rst_n);
+  coherence_if coherence [1](clk, rst_n);
 
   logic halted;
   logic trap_illegal;
@@ -51,7 +53,14 @@ module tb_core;
 
   l1d_cache u_l1d (
       .cpu    (core_dmem_if),
-      .memory (fabric_if[1])
+      .memory (fabric_if[1]),
+      .coherence (coherence[0])
+  );
+
+  coherence_hub #(.NUM_CACHES(1)) u_coherence (
+      .clk        (clk),
+      .rst_n      (rst_n),
+      .cache_port (coherence)
   );
 
   shared_interconnect #(
@@ -61,7 +70,12 @@ module tb_core;
       .clk         (clk),
       .rst_n       (rst_n),
       .master_port (fabric_if),
-      .slave_port  (memory_if)
+      .slave_port  (l2_if)
+  );
+
+  l2_cache u_l2 (
+      .upstream (l2_if[0]),
+      .memory   (memory_if[0])
   );
 
   sync_memory #(

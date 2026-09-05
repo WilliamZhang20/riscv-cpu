@@ -15,6 +15,7 @@ module tb_l1d_cache;
 
   mem_if cpu_if(clk, rst_n);
   mem_if memory_if(clk, rst_n);
+  coherence_if coherence [1](clk, rst_n);
 
   logic        cpu_req_valid;
   logic [31:0] cpu_req_addr;
@@ -35,7 +36,14 @@ module tb_l1d_cache;
       .LINE_BYTES  (LINE_BYTES)
   ) dut (
       .cpu    (cpu_if),
-      .memory (memory_if)
+      .memory (memory_if),
+      .coherence (coherence[0])
+  );
+
+  coherence_hub #(.NUM_CACHES(1)) u_coherence (
+      .clk        (clk),
+      .rst_n      (rst_n),
+      .cache_port (coherence)
   );
 
   // Variable-latency memory with persistent byte-enabled storage.
@@ -284,6 +292,14 @@ module tb_l1d_cache;
     rst_n <= 1'b1;
     load_and_check(32'h24, 4'b1111, initial_word(9), 0);
     check_counts(4, 0, "reset invalidation");
+
+    // MMIO-region reads and writes bypass allocation and preserve byte enables.
+    load_and_check(32'h8000_0020, 4'b1111, initial_word(8), 0);
+    load_and_check(32'h8000_0020, 4'b1111, initial_word(8), 0);
+    check_counts(6, 0, "uncached read bypass");
+    store_and_check(32'h8000_0020, 32'h1357_9BDF, 4'b1111);
+    load_and_check(32'h8000_0020, 4'b1111, 32'h1357_9BDF, 0);
+    check_counts(7, 1, "uncached write bypass");
 
     $display("tb_l1d_cache: PASS");
     $finish;

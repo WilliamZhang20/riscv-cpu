@@ -220,6 +220,11 @@ module tb_l1i_cache;
     read_and_check(32'h0000_0024, 0);
     check_read_count(4, "reset invalidation");
 
+    // Addresses outside CACHE_LIMIT bypass allocation on every access.
+    read_and_check(32'h8000_0020, 0);
+    read_and_check(32'h8000_0020, 0);
+    check_read_count(6, "uncached instruction bypass");
+
     $display("tb_l1i_cache: PASS");
     $finish;
   end

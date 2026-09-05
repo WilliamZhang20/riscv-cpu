@@ -14,10 +14,14 @@ module l1d_cache #(
     parameter int unsigned ADDR_W       = 32,
     parameter int unsigned DATA_W       = 32,
     parameter int unsigned CACHE_BYTES  = 1024,
-    parameter int unsigned LINE_BYTES   = 16
+    parameter int unsigned LINE_BYTES   = 16,
+    parameter logic [ADDR_W-1:0] CACHE_BASE  = 32'h0000_0000,
+    parameter logic [ADDR_W-1:0] CACHE_LIMIT = 32'h7FFF_FFFF,
+    parameter bit ENABLE_COHERENCE = 1'b1
 ) (
     mem_if.slave  cpu,
-    mem_if.master memory
+    mem_if.master memory,
+    coherence_if.cache coherence
 );
 
   localparam int unsigned BYTE_LANES     = DATA_W / 8;
@@ -29,13 +33,16 @@ module l1d_cache #(
   localparam int unsigned INDEX_W        = $clog2(NUM_LINES);
   localparam int unsigned TAG_W          = ADDR_W - OFFSET_W - INDEX_W;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     S_IDLE,
     S_LOOKUP,
     S_REFILL_REQ,
     S_REFILL_RSP,
     S_WRITE_REQ,
     S_WRITE_RSP,
+    S_COH_REQ,
+    S_COH_ACK,
+    S_COH_RELEASE,
     S_RESPONSE
   } state_e;
 
@@ -60,6 +67,7 @@ module l1d_cache #(
   logic [ADDR_W-1:0] line_base;
   logic hit;
   logic request_aligned;
+  logic request_cacheable;
 
   assign request_index = request_addr_q[OFFSET_W + INDEX_W - 1:OFFSET_W];
   assign request_tag   = request_addr_q[ADDR_W-1:OFFSET_W + INDEX_W];
@@ -68,6 +76,10 @@ module l1d_cache #(
                           {OFFSET_W{1'b0}}};
   assign hit = valid_array[request_index] &&
                (tag_array[request_index] == request_tag);
+  /* verilator lint_off UNSIGNED */
+  assign request_cacheable = (request_addr_q >= CACHE_BASE) &&
+                             (request_addr_q <= CACHE_LIMIT);
+  /* verilator lint_on UNSIGNED */
 
   // Byte enables encode both access width and byte lane. Reject malformed or
   // unnaturally aligned requests locally, including on cache hits.
@@ -94,12 +106,21 @@ module l1d_cache #(
   assign memory.req_addr = (state_q == S_REFILL_REQ)
                          ? line_base + ADDR_W'(refill_word_q * WORD_BYTES)
                          : request_addr_q;
-  assign memory.req_write = (state_q == S_WRITE_REQ);
+  assign memory.req_write = (state_q == S_WRITE_REQ) && request_write_q;
   assign memory.req_wdata = request_wdata_q;
   assign memory.req_be = (state_q == S_REFILL_REQ)
                        ? {BYTE_LANES{1'b1}} : request_be_q;
   assign memory.rsp_ready = (state_q == S_REFILL_RSP) ||
                             (state_q == S_WRITE_RSP);
+
+  assign coherence.req_valid = ENABLE_COHERENCE && (state_q == S_COH_REQ);
+  assign coherence.req_addr  = request_addr_q;
+  assign coherence.ack_ready = ENABLE_COHERENCE &&
+                               (state_q == S_COH_RELEASE);
+  assign coherence.inv_ready = ENABLE_COHERENCE &&
+                               ((state_q == S_IDLE) ||
+                                (state_q == S_RESPONSE) ||
+                                (state_q == S_COH_REQ));
 
   always_ff @(posedge cpu.clk or negedge cpu.rst_n) begin
     if (!cpu.rst_n) begin
@@ -116,6 +137,13 @@ module l1d_cache #(
       for (int line = 0; line < NUM_LINES; line++)
         valid_array[line] <= 1'b0;
     end else begin
+      if (coherence.inv_valid && coherence.inv_ready &&
+          valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]] &&
+          tag_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]] ==
+              coherence.inv_addr[ADDR_W-1:OFFSET_W + INDEX_W])
+        valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]]
+            <= 1'b0;
+
       unique case (state_q)
         S_IDLE: begin
           if (cpu.req_valid && cpu.req_ready) begin
@@ -134,9 +162,12 @@ module l1d_cache #(
         end
 
         S_LOOKUP: begin
-          if (request_write_q) begin
-            write_hit_q <= hit;
+          if (!request_cacheable) begin
+            write_hit_q <= 1'b0;
             state_q     <= S_WRITE_REQ;
+          end else if (request_write_q) begin
+            write_hit_q <= request_cacheable && hit;
+            state_q     <= ENABLE_COHERENCE ? S_COH_REQ : S_WRITE_REQ;
           end else if (hit) begin
             response_data_q  <= data_array[request_index][request_word];
             response_error_q <= 1'b0;
@@ -186,7 +217,7 @@ module l1d_cache #(
           if (memory.rsp_valid && memory.rsp_ready) begin
             response_data_q  <= memory.rsp_rdata;
             response_error_q <= memory.rsp_error;
-            if (!memory.rsp_error && write_hit_q) begin
+            if (!memory.rsp_error && request_write_q && write_hit_q) begin
               for (int byte_lane = 0; byte_lane < BYTE_LANES; byte_lane++) begin
                 if (request_be_q[byte_lane])
                   data_array[request_index][request_word]
@@ -194,8 +225,26 @@ module l1d_cache #(
                       request_wdata_q[8*byte_lane +: 8];
               end
             end
-            state_q <= S_RESPONSE;
+            if (request_write_q && request_cacheable && ENABLE_COHERENCE)
+              state_q <= S_COH_RELEASE;
+            else
+              state_q <= S_RESPONSE;
           end
+        end
+
+        S_COH_REQ: begin
+          if (coherence.req_valid && coherence.req_ready)
+            state_q <= S_COH_ACK;
+        end
+
+        S_COH_ACK: begin
+          if (coherence.ack_valid)
+            state_q <= S_WRITE_REQ;
+        end
+
+        S_COH_RELEASE: begin
+          if (coherence.ack_valid && coherence.ack_ready)
+            state_q <= S_RESPONSE;
         end
 
         S_RESPONSE: begin

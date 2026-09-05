@@ -1,6 +1,10 @@
 # UVM in Verilator
 
-## Status: it works, but it is not the right next step
+## Status: protocol-level UVM environment added
+
+`tb-coherence-uvm.sv` provides two UVM cache agents and a scoreboard around the
+coherence hub. It deliberately complements, rather than replaces, the fast
+directed and formal-style tests in `sim/`.
 
 Verified on 2026-09-03 with Verilator 5.050 and Accellera UVM 2020.3.1
 (`github.com/accellera-official/uvm-core`), running a full agent against
@@ -24,19 +28,18 @@ UVM on a new simulator was exercised and worked:
 - build/connect/run/report phases with objections
 - `uvm_field_int` macros and `uvm_info` / `uvm_error` reporting
 
-Nothing here is blocked on tooling. The reason `dv/` is still empty is
-methodology fit, not capability — see "Why not yet" below.
+The Accellera UVM source is pinned as the `dv/uvm-core` git submodule. The
+project-specific Verilator DPI shim remains in `dv/dpi`.
 
 ## The recipe (three non-obvious steps)
 
 ```sh
-git clone --depth 1 https://github.com/accellera-official/uvm-core.git
-cp -r uvm-core/src/dpi dpi          # patched copy, see step 2
+git submodule update --init --depth 1
 
 verilator --binary --timing --vpi --top-module tb \
           --build-jobs $(nproc) --verilate-jobs $(nproc) \
-          -CFLAGS "-I$PWD/dpi" \
-          +incdir+uvm-core/src uvm-core/src/uvm_pkg.sv dpi/uvm_dpi.cc tb.sv
+          -CFLAGS "-I$PWD/dv/dpi" \
+          +incdir+dv/uvm-core/src dv/uvm-core/src/uvm_pkg.sv dv/dpi/uvm_dpi.cc tb.sv
 ```
 
 1. **`uvm_dpi.cc` must be passed as a source.** Without it the link fails on

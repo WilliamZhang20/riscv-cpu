@@ -9,7 +9,9 @@ module l1i_cache #(
     parameter int unsigned ADDR_W       = 32,
     parameter int unsigned DATA_W       = 32,
     parameter int unsigned CACHE_BYTES  = 1024,
-    parameter int unsigned LINE_BYTES   = 16
+    parameter int unsigned LINE_BYTES   = 16,
+    parameter logic [ADDR_W-1:0] CACHE_BASE  = 32'h0000_0000,
+    parameter logic [ADDR_W-1:0] CACHE_LIMIT = 32'h7FFF_FFFF
 ) (
     mem_if.slave  cpu,
     mem_if.master memory
@@ -29,6 +31,8 @@ module l1i_cache #(
     S_LOOKUP,
     S_REFILL_REQ,
     S_REFILL_RSP,
+    S_BYPASS_REQ,
+    S_BYPASS_RSP,
     S_RESPONSE
   } state_e;
 
@@ -48,6 +52,7 @@ module l1i_cache #(
   logic [WORD_OFF_W-1:0] request_word;
   logic [ADDR_W-1:0] line_base;
   logic hit;
+  logic request_cacheable;
 
   assign request_index = request_addr_q[OFFSET_W + INDEX_W - 1:OFFSET_W];
   assign request_tag   = request_addr_q[ADDR_W-1:OFFSET_W + INDEX_W];
@@ -56,18 +61,26 @@ module l1i_cache #(
                           {OFFSET_W{1'b0}}};
   assign hit = valid_array[request_index] &&
                (tag_array[request_index] == request_tag);
+  /* verilator lint_off UNSIGNED */
+  assign request_cacheable = (request_addr_q >= CACHE_BASE) &&
+                             (request_addr_q <= CACHE_LIMIT);
+  /* verilator lint_on UNSIGNED */
 
   assign cpu.req_ready = (state_q == S_IDLE);
   assign cpu.rsp_valid = (state_q == S_RESPONSE);
   assign cpu.rsp_rdata = response_data_q;
   assign cpu.rsp_error = response_error_q;
 
-  assign memory.req_valid = (state_q == S_REFILL_REQ);
-  assign memory.req_addr  = line_base + ADDR_W'(refill_word_q * WORD_BYTES);
+  assign memory.req_valid = (state_q == S_REFILL_REQ) ||
+                            (state_q == S_BYPASS_REQ);
+  assign memory.req_addr  = (state_q == S_BYPASS_REQ) ? request_addr_q :
+                            line_base +
+                            ADDR_W'(refill_word_q * WORD_BYTES);
   assign memory.req_write = 1'b0;
   assign memory.req_wdata = '0;
   assign memory.req_be    = {BYTE_LANES{1'b1}};
-  assign memory.rsp_ready = (state_q == S_REFILL_RSP);
+  assign memory.rsp_ready = (state_q == S_REFILL_RSP) ||
+                            (state_q == S_BYPASS_RSP);
 
   always_ff @(posedge cpu.clk or negedge cpu.rst_n) begin
     if (!cpu.rst_n) begin
@@ -100,7 +113,9 @@ module l1i_cache #(
         end
 
         S_LOOKUP: begin
-          if (hit) begin
+          if (!request_cacheable) begin
+            state_q <= S_BYPASS_REQ;
+          end else if (hit) begin
             response_data_q  <= data_array[request_index][request_word];
             response_error_q <= 1'b0;
             state_q          <= S_RESPONSE;
@@ -140,6 +155,19 @@ module l1i_cache #(
                 state_q       <= S_REFILL_REQ;
               end
             end
+          end
+        end
+
+        S_BYPASS_REQ: begin
+          if (memory.req_valid && memory.req_ready)
+            state_q <= S_BYPASS_RSP;
+        end
+
+        S_BYPASS_RSP: begin
+          if (memory.rsp_valid && memory.rsp_ready) begin
+            response_data_q  <= memory.rsp_rdata;
+            response_error_q <= memory.rsp_error;
+            state_q          <= S_RESPONSE;
           end
         end
 

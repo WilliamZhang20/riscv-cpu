@@ -8,6 +8,8 @@ make            # assemble test-basic.s, build the DUT, run the testbench
 make regress    # lint and run all block/integration tests
 make l1i-test   # adversarial standalone L1 instruction-cache test
 make l1d-test   # data-cache policy, subword, and failure-atomicity test
+make coherence-test # two private L1Ds, invalidation, concurrent stores
+make multicore-lint # lint the complete N-core composition root
 make trace      # same, plus one line per retired instruction
 make lint       # Verilator lint of the RTL only
 make clean
@@ -26,6 +28,7 @@ never read it.
 | `tb-core.sv` | self-checking core + split L1 caches + interconnect test |
 | `cache/tb-l1i-cache.sv` | standalone cache refill/backpressure/error test |
 | `cache/tb-l1d-cache.sv` | standalone load/store policy and atomicity test |
+| `cache/tb-coherence.sv` | two-cache visibility and store-serialization test |
 | `asm.py` | minimal two-pass RV32I assembler (no toolchain on this machine) |
 | `test-basic.s` | self-checking smoke test |
 
@@ -47,7 +50,8 @@ The integration test uses a flat 4 KiB synchronous, byte-enabled memory behind
 the shared request/response interconnect. Programs load at `0x000`; the data
 region starts at `0x400`. Instructions pass through a blocking 1 KiB L1I; data
 passes through a 1 KiB write-through/no-write-allocate L1D. Both use 16-byte
-lines. The memory target reports misaligned and out-of-range accesses through
+lines and feed a shared 16 KiB L2. Addresses above `0x7fff_ffff` bypass caching
+for MMIO. The memory target reports misaligned and out-of-range accesses through
 the bus response.
 
 ## Writing a test

@@ -11,7 +11,8 @@ Will use RV32I ISA, everything coded in SystemVerilog
 - [x] Backpressured memory interconnect
 - [x] Blocking direct-mapped L1 instruction cache
 - [x] Write-through direct-mapped L1 data cache
-- [ ] Shared L2 cache and coherence
+- [x] Shared L2 cache and broadcast-invalidation coherence
+- [x] Parameterized multicore CPU subsystem top
 - [ ] Implement Pipeline Interrupts
 - [ ] Implement an integrated GPU
 - [ ] Connect the CPU and GPU
@@ -25,7 +26,10 @@ ports feed a round-robin shared interconnect and synchronous memory. The
 instruction path includes a 1 KiB direct-mapped, blocking L1 cache with 16-byte
 lines and sequential 32-bit refills. The matching 1 KiB L1 data cache uses
 read-allocate, write-through, and no-write-allocate policies; cached stores are
-committed only after memory acknowledges them.
+committed only after memory acknowledges them. A shared 16 KiB L2 sits below
+the L1 interconnect. Cacheable address parameters provide uncached/MMIO bypass,
+and a separate coherence hub serializes write ownership and broadcasts line
+invalidations between private L1Ds.
 
 ```sh
 cd sim && make          # -> tb_core: PASS
@@ -35,8 +39,8 @@ cd sim && make regress  # lint + block tests + integration test
 There is no RISC-V toolchain on this machine, so `sim/asm.py` is a minimal
 assembler that turns `sim/*.s` into `$readmemh` images. See `sim/README.md`.
 
-Not implemented yet: a shared L2, coherence/multicore, complete traps/CSRs, and
-the GPU. `l2-cache.sv` is still empty.
+Not implemented yet: instantiating multiple complete CPU cores, dirty/write-back
+coherence states, complete traps/CSRs, and the GPU.
 
 ## Toolchain
 

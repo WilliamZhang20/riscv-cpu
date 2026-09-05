@@ -23,8 +23,11 @@ SRCS := $(RTL_DIR)/rv32i-pkg.sv \
         $(RTL_DIR)/control-unit.sv \
         $(RTL_DIR)/program-counter.sv \
         $(RTL_DIR)/bus/mem-if.sv \
+        $(RTL_DIR)/bus/coherence-if.sv \
         $(RTL_DIR)/l1i-cache.sv \
         $(RTL_DIR)/l1d-cache.sv \
+        $(RTL_DIR)/l2-cache.sv \
+        $(RTL_DIR)/bus/coherence-hub.sv \
         $(RTL_DIR)/bus/shared-interconnect.sv \
         $(RTL_DIR)/memory/sync-memory.sv \
         $(RTL_DIR)/single-core.sv \
@@ -35,8 +38,8 @@ BIN   := obj_dir/$(TOP)
 PROG  ?= test-basic
 FLAGS := --binary --timing --assert --timescale 1ns/1ps -Wno-DECLFILENAME
 
-.PHONY: all run trace waves lint bus-lint bus-test bus-core-lint bus-core-test \
-        l1i-lint l1i-test l1d-lint l1d-test regress clean
+.PHONY: all run trace waves lint bus-lint bus-test bus-core-lint bus-core-test uvm-test \
+        l1i-lint l1i-test l1d-lint l1d-test coherence-test l2-lint multicore-lint regress clean
 all: run
 
 $(PROG).hex: $(PROG).s asm.py
@@ -110,19 +113,62 @@ l1i-test:
 	./obj_dir/tb_l1i_cache
 
 L1D_SRCS := ../rtl/bus/mem-if.sv \
+            ../rtl/bus/coherence-if.sv \
             ../rtl/l1d-cache.sv \
+            ../rtl/bus/coherence-hub.sv \
             cache/tb-l1d-cache.sv
 
 l1d-lint:
 	$(VERILATOR) --lint-only --assert --timescale 1ns/1ps \
-	  --top-module l1d_cache ../rtl/bus/mem-if.sv ../rtl/l1d-cache.sv
+	  --top-module l1d_cache ../rtl/bus/mem-if.sv \
+	  ../rtl/bus/coherence-if.sv ../rtl/l1d-cache.sv
 
 l1d-test:
 	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps \
 	  --top-module tb_l1d_cache -o tb_l1d_cache $(L1D_SRCS)
 	./obj_dir/tb_l1d_cache
 
-regress: lint bus-lint l1i-lint l1d-lint bus-test l1i-test l1d-test run
+coherence-test:
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps \
+	  --top-module tb_coherence -o tb_coherence ../rtl/bus/mem-if.sv \
+	  ../rtl/bus/coherence-if.sv ../rtl/l1d-cache.sv \
+	  ../rtl/bus/coherence-hub.sv ../rtl/bus/shared-interconnect.sv \
+	  ../rtl/memory/sync-memory.sv cache/tb-coherence.sv
+	./obj_dir/tb_coherence
+
+l2-lint:
+	$(VERILATOR) --lint-only --assert --timescale 1ns/1ps \
+	  --top-module l2_cache ../rtl/bus/mem-if.sv \
+	  ../rtl/bus/coherence-if.sv ../rtl/l1d-cache.sv ../rtl/l2-cache.sv
+
+multicore-lint:
+	$(VERILATOR) --lint-only --assert --timescale 1ns/1ps --top-module multicore_cpu \
+	  ../rtl/rv32i-pkg.sv ../rtl/alu.sv ../rtl/register-file.sv ../rtl/imm-gen.sv \
+	  ../rtl/branch-unit.sv ../rtl/control-unit.sv ../rtl/bus/mem-if.sv \
+	  ../rtl/bus/coherence-if.sv ../rtl/l1i-cache.sv ../rtl/l1d-cache.sv \
+	  ../rtl/l2-cache.sv ../rtl/bus/coherence-hub.sv ../rtl/bus/shared-interconnect.sv \
+	  ../rtl/single-core.sv ../rtl/multicore.sv
+
+regress: lint bus-lint l1i-lint l1d-lint l2-lint multicore-lint bus-test l1i-test l1d-test \
+         coherence-test run
+
+UVM_HOME ?= ../dv/uvm-core
+UVM_DPI  ?= ../dv/dpi
+
+uvm-test:
+	@if [ ! -f "$(UVM_HOME)/src/uvm_pkg.sv" ]; then \
+		echo "UVM source missing: run 'git submodule update --init'"; \
+		exit 2; \
+	fi
+	$(VERILATOR) --binary --timing --vpi --assert --timescale 1ns/1ps -Wno-fatal \
+	  --build-jobs $$(nproc) --verilate-jobs $$(nproc) \
+	  -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND \
+	  --top-module tb_coherence_uvm -o tb_coherence_uvm \
+	  -CFLAGS "-I$(UVM_DPI)" +incdir+$(UVM_HOME)/src \
+	  $(UVM_HOME)/src/uvm_pkg.sv $(UVM_DPI)/uvm_dpi.cc \
+	  ../rtl/bus/coherence-if.sv ../rtl/bus/coherence-hub.sv \
+	  ../dv/tb-coherence-uvm.sv
+	./obj_dir/tb_coherence_uvm
 
 clean:
 	rm -rf obj_dir *.hex *.vcd
