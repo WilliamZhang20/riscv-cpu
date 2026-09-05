@@ -1,4 +1,6 @@
-# Goal: develop a multi-core CPU + iGPU from scratch in SystemVerilog and simulate it on a PDK
+# RISCV 32-Bit Multi-Core CPU
+
+Goal: develop a multi-core CPU + iGPU from scratch in SystemVerilog and simulate it on a PDK
 
 Will use RV32I ISA, everything coded in SystemVerilog
 
