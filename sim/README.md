@@ -5,6 +5,9 @@
 ```sh
 cd sim
 make            # assemble test-basic.s, build the DUT, run the testbench
+make regress    # lint and run all block/integration tests
+make l1i-test   # adversarial standalone L1 instruction-cache test
+make l1d-test   # data-cache policy, subword, and failure-atomicity test
 make trace      # same, plus one line per retired instruction
 make lint       # Verilator lint of the RTL only
 make clean
@@ -20,7 +23,9 @@ never read it.
 | File | Purpose |
 |---|---|
 | `Makefile` | build + run; `rv32i-pkg.sv` must be first in the source list |
-| `tb-core.sv` | self-checking testbench and flat 4 KiB memory model |
+| `tb-core.sv` | self-checking core + split L1 caches + interconnect test |
+| `cache/tb-l1i-cache.sv` | standalone cache refill/backpressure/error test |
+| `cache/tb-l1d-cache.sv` | standalone load/store policy and atomicity test |
 | `asm.py` | minimal two-pass RV32I assembler (no toolchain on this machine) |
 | `test-basic.s` | self-checking smoke test |
 
@@ -38,14 +43,12 @@ out-of-range access, or a misaligned fetch or data access. Plusargs:
 
 ## Memory model
 
-One flat von Neumann array, 1024 words covering `0x000`–`0xFFF`: asynchronous
-read on both ports, byte-enabled synchronous write, no latency and no
-handshake. Programs load at `0x000`, the data region starts at `0x400`.
-
-This is deliberately "magic" memory. It validates the datapath without a memory
-system in the way; because it is indexed by word it would silently absorb a
-misaligned access, which is why the testbench checks alignment on the bus
-instead.
+The integration test uses a flat 4 KiB synchronous, byte-enabled memory behind
+the shared request/response interconnect. Programs load at `0x000`; the data
+region starts at `0x400`. Instructions pass through a blocking 1 KiB L1I; data
+passes through a 1 KiB write-through/no-write-allocate L1D. Both use 16-byte
+lines. The memory target reports misaligned and out-of-range accesses through
+the bus response.
 
 ## Writing a test
 

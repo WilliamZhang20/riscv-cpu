@@ -6,7 +6,10 @@ Will use RV32I ISA, everything coded in SystemVerilog
 
 - [x] Baseline multicycle core (5-state FSM, one instruction in flight)
 - [x] Single CPU pipelined 5-stage core (IF, ID, EX, MEM, WB)
-- [x] Multi-level cache hierarchy / interconnects
+- [x] Backpressured memory interconnect
+- [x] Blocking direct-mapped L1 instruction cache
+- [x] Write-through direct-mapped L1 data cache
+- [ ] Shared L2 cache and coherence
 - [ ] Implement Pipeline Interrupts
 - [ ] Implement an integrated GPU
 - [ ] Connect the CPU and GPU
@@ -14,21 +17,24 @@ Will use RV32I ISA, everything coded in SystemVerilog
 
 ## Status
 
-`rtl/` holds a working baseline RV32I core: a 5-state FSM (IF, ID, EX, MEM, WB)
-running one instruction at a time against magic memory. Every state boundary in
-`single-core.sv` is where a pipeline register goes; the datapath and control
-around it do not change when it is cut.
+`rtl/` holds a working five-stage pipelined RV32I core with forwarding, branch
+flushes, and memory backpressure. Separate instruction and data request/response
+ports feed a round-robin shared interconnect and synchronous memory. The
+instruction path includes a 1 KiB direct-mapped, blocking L1 cache with 16-byte
+lines and sequential 32-bit refills. The matching 1 KiB L1 data cache uses
+read-allocate, write-through, and no-write-allocate policies; cached stores are
+committed only after memory acknowledges them.
 
 ```sh
-cd sim && make      # -> tb_core: PASS
+cd sim && make          # -> tb_core: PASS
+cd sim && make regress  # lint + block tests + integration test
 ```
 
 There is no RISC-V toolchain on this machine, so `sim/asm.py` is a minimal
 assembler that turns `sim/*.s` into `$readmemh` images. See `sim/README.md`.
 
-Not implemented yet: pipelining and hazards, CSRs/traps, real caches, anything
-multi-core, the GPU. `l1i-cache.sv`, `l1d-cache.sv` and `l2-cache.sv` are still
-empty.
+Not implemented yet: a shared L2, coherence/multicore, complete traps/CSRs, and
+the GPU. `l2-cache.sv` is still empty.
 
 ## Toolchain
 
