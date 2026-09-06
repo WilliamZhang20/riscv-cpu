@@ -38,7 +38,7 @@ BIN   := obj_dir/$(TOP)
 PROG  ?= test-basic
 FLAGS := --binary --timing --assert --timescale 1ns/1ps -Wno-DECLFILENAME
 
-.PHONY: all run trace waves lint bus-lint bus-test bus-core-lint bus-core-test uvm-test \
+.PHONY: all run trace waves lint bus-lint bus-test bus-core-lint bus-core-test noc-test multicore-test interrupt-test dram-test axi-lite-test uvm-test \
         l1i-lint l1i-test l1d-lint l1d-test coherence-test l2-lint multicore-lint regress clean
 all: run
 
@@ -64,9 +64,11 @@ lint:
 
 BUS_SRCS := ../rtl/bus/mem-if.sv \
             ../rtl/bus/shared-interconnect.sv \
+            ../rtl/bus/noc-fabric.sv \
             ../rtl/memory/sync-memory.sv \
             bus/tb-shared-interconnect.sv
 
+noc-test: bus-test
 bus-test:
 	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps \
 	  --top-module tb_shared_interconnect -o tb_shared_interconnect $(BUS_SRCS)
@@ -77,6 +79,7 @@ bus-lint:
 	  --top-module shared_interconnect \
 	  ../rtl/bus/mem-if.sv \
 	  ../rtl/bus/shared-interconnect.sv \
+            ../rtl/bus/noc-fabric.sv \
 	  ../rtl/memory/sync-memory.sv
 
 BUS_CORE_SRCS := ../rtl/rv32i-pkg.sv \
@@ -87,6 +90,7 @@ BUS_CORE_SRCS := ../rtl/rv32i-pkg.sv \
                  ../rtl/control-unit.sv \
                  ../rtl/bus/mem-if.sv \
                  ../rtl/bus/shared-interconnect.sv \
+            ../rtl/bus/noc-fabric.sv \
                  ../rtl/memory/sync-memory.sv \
                  ../rtl/single-core.sv
 
@@ -133,6 +137,7 @@ coherence-test:
 	  --top-module tb_coherence -o tb_coherence ../rtl/bus/mem-if.sv \
 	  ../rtl/bus/coherence-if.sv ../rtl/l1d-cache.sv \
 	  ../rtl/bus/coherence-hub.sv ../rtl/bus/shared-interconnect.sv \
+            ../rtl/bus/noc-fabric.sv \
 	  ../rtl/memory/sync-memory.sv cache/tb-coherence.sv
 	./obj_dir/tb_coherence
 
@@ -147,10 +152,32 @@ multicore-lint:
 	  ../rtl/branch-unit.sv ../rtl/control-unit.sv ../rtl/bus/mem-if.sv \
 	  ../rtl/bus/coherence-if.sv ../rtl/l1i-cache.sv ../rtl/l1d-cache.sv \
 	  ../rtl/l2-cache.sv ../rtl/bus/coherence-hub.sv ../rtl/bus/shared-interconnect.sv \
+            ../rtl/bus/noc-fabric.sv \
 	  ../rtl/single-core.sv ../rtl/multicore.sv
 
 regress: lint bus-lint l1i-lint l1d-lint l2-lint multicore-lint bus-test l1i-test l1d-test \
-         coherence-test run
+         coherence-test noc-test multicore-test interrupt-test dram-test axi-lite-test run
+
+dram-test:
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps -Wno-fatal -Wno-UNSIGNED --top-module tb_dram -o tb_dram ../rtl/bus/mem-if.sv ../rtl/memory/dram-model.sv tb-dram.sv
+	./obj_dir/tb_dram
+
+axi-lite-test:
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps -Wno-fatal --top-module tb_axi_lite -o tb_axi_lite ../rtl/bus/mem-if.sv ../rtl/bus/axi4-lite-if.sv ../rtl/bus/mem-to-axi-lite.sv tb-axi-lite.sv
+	./obj_dir/tb_axi_lite
+
+interrupt-test:
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps --top-module tb_interrupt -o tb_interrupt \
+	  ../rtl/rv32i-pkg.sv ../rtl/alu.sv ../rtl/register-file.sv ../rtl/imm-gen.sv ../rtl/branch-unit.sv ../rtl/control-unit.sv ../rtl/program-counter.sv \
+	  ../rtl/bus/mem-if.sv ../rtl/single-core.sv ../rtl/bus/shared-interconnect.sv ../rtl/memory/sync-memory.sv tb-interrupt.sv
+	./obj_dir/tb_interrupt
+
+multicore-test: $(PROG).hex
+	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps --top-module tb_multicore -o tb_multicore \
+	  ../rtl/rv32i-pkg.sv ../rtl/alu.sv ../rtl/register-file.sv ../rtl/imm-gen.sv ../rtl/branch-unit.sv ../rtl/control-unit.sv ../rtl/program-counter.sv \
+	  ../rtl/bus/mem-if.sv ../rtl/bus/coherence-if.sv ../rtl/l1i-cache.sv ../rtl/l1d-cache.sv ../rtl/l2-cache.sv ../rtl/bus/coherence-hub.sv \
+	  ../rtl/bus/shared-interconnect.sv ../rtl/memory/sync-memory.sv ../rtl/single-core.sv ../rtl/multicore.sv tb-multicore.sv
+	./obj_dir/tb_multicore +PROG=$(PROG).hex
 
 UVM_HOME ?= ../dv/uvm-core
 UVM_DPI  ?= ../dv/dpi

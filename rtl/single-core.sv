@@ -7,16 +7,19 @@
 module cpu_core
   import rv32i_pkg::*;
 #(
-    parameter logic [XLEN-1:0] RESET_PC = 32'h0000_0000
+    parameter logic [XLEN-1:0] RESET_PC = 32'h0000_0000,
+    parameter logic [XLEN-1:0] TRAP_VECTOR = 32'h0000_0100
 )(
     input logic clk,
     input logic rst_n,
+    input logic irq,
 
     mem_if.master imem,
     mem_if.master dmem,
 
     output logic halted,
     output logic trap_illegal,
+    output logic interrupt_taken,
     output logic retire,
     output logic [XLEN-1:0] retire_pc,
     output logic [XLEN-1:0] retire_instr
@@ -37,6 +40,7 @@ module cpu_core
     logic [4:0]      rs1_addr;
     logic [4:0]      rs2_addr;
     logic [4:0]      rd_addr;
+    logic [XLEN-1:0] csr_old;
     logic [XLEN-1:0] imm;
     decoded_t        d;
   } id_ex_reg_t;
@@ -49,6 +53,7 @@ module cpu_core
     logic [XLEN-1:0] rs2_data;
     logic [4:0]      rs2_addr;
     logic [4:0]      rd_addr;
+    logic [XLEN-1:0] csr_old;
     decoded_t        d;
   } ex_mem_reg_t;
 
@@ -60,6 +65,7 @@ module cpu_core
     logic [XLEN-1:0] alu_result;
     logic [XLEN-1:0] load_data;
     logic [4:0]      rd_addr;
+    logic [XLEN-1:0] csr_old;
     decoded_t        d;
   } mem_wb_reg_t;
 
@@ -69,7 +75,7 @@ module cpu_core
   mem_wb_reg_t mem_wb_q, mem_wb_n;
 
   logic [XLEN-1:0] pc_q;
-  logic            halted_q, trap_illegal_q;
+  logic            halted_q, trap_illegal_q, interrupt_taken_q;
 
   // --------------------------------------------------------------------------
   // Instruction fetch transaction state
@@ -84,9 +90,11 @@ module cpu_core
   logic            imem_rsp_fire;
 
   logic            ex_redirect;
+  logic [XLEN-1:0] csr_old, csr_src, csr_new, ex_result;
+  logic [XLEN-1:0] mtvec_q, mepc_q, mcause_q;
   logic [XLEN-1:0] ex_target;
 
-  assign imem.req_valid = !halted_q && !fetch_pending_q && !fetch_hold_q &&
+  assign imem.req_valid = !halted_q && !irq && !fetch_pending_q && !fetch_hold_q &&
                           !if_id_q.valid &&
                           !mem_stall && !frontend_stop && !ex_redirect;
   assign imem.req_addr  = pc_q;
@@ -184,6 +192,22 @@ module cpu_core
   end
 
   assign alu_b = (id_ex_q.d.b_sel == B_IMM) ? id_ex_q.imm : ex_rs2_data;
+  always_comb begin
+    unique case (id_ex_q.d.csr_addr)
+      12'h305: csr_old = mtvec_q;
+      12'h341: csr_old = mepc_q;
+      12'h342: csr_old = mcause_q;
+      default: csr_old = 32'b0;
+    endcase
+    csr_src = (id_ex_q.d.imm_sel == IMM_Z) ? id_ex_q.imm : ex_rs1_data;
+    unique case (id_ex_q.d.csr_funct3)
+      F3_CSRRW, F3_CSRRWI: csr_new = csr_src;
+      F3_CSRRS, F3_CSRRSI: csr_new = csr_old | csr_src;
+      F3_CSRRC, F3_CSRRCI: csr_new = csr_old & ~csr_src;
+      default: csr_new = csr_old;
+    endcase
+    ex_result = id_ex_q.d.csr ? csr_new : alu_result;
+  end
 
   alu u_alu (
       .op     (id_ex_q.d.alu_op),
@@ -199,10 +223,10 @@ module cpu_core
       .take     (branch_take)
   );
 
-  assign ex_redirect = id_ex_q.valid && !id_ex_q.d.illegal &&
-                       !id_ex_q.d.halt && branch_take && !mem_stall;
-  assign ex_target = (id_ex_q.d.br_op == BR_JALR)
-                   ? {alu_result[XLEN-1:1], 1'b0} : alu_result;
+  assign ex_redirect = id_ex_q.valid && !id_ex_q.d.illegal && !mem_stall &&
+                       ((id_ex_q.d.mret) || (id_ex_q.d.br_op != BR_NONE && branch_take));
+  assign ex_target = id_ex_q.d.mret ? mepc_q : ((id_ex_q.d.br_op == BR_JALR)
+                   ? {alu_result[XLEN-1:1], 1'b0} : alu_result);
 
   // --------------------------------------------------------------------------
   // Data transaction state
@@ -271,6 +295,7 @@ module cpu_core
     unique case (mem_wb_q.d.wb_sel)
       WB_MEM:  rf_wdata = mem_wb_q.load_data;
       WB_PC4:  rf_wdata = mem_wb_q.pc + 32'd4;
+      WB_CSR:  rf_wdata = mem_wb_q.csr_old;
       default: rf_wdata = mem_wb_q.alu_result;
     endcase
   end
@@ -281,13 +306,13 @@ module cpu_core
 
   logic frontend_stop;
   assign frontend_stop = halted_q ||
-                         (if_id_q.valid && (d.illegal || d.halt)) ||
+                         (if_id_q.valid && (d.illegal || d.halt || d.mret)) ||
                          (id_ex_q.valid &&
-                          (id_ex_q.d.illegal || id_ex_q.d.halt)) ||
+                          (id_ex_q.d.illegal || id_ex_q.d.halt || id_ex_q.d.mret)) ||
                          (ex_mem_q.valid &&
-                          (ex_mem_q.d.illegal || ex_mem_q.d.halt)) ||
+                          (ex_mem_q.d.illegal || ex_mem_q.d.halt || ex_mem_q.d.mret)) ||
                          (mem_wb_q.valid &&
-                          (mem_wb_q.d.illegal || mem_wb_q.d.halt));
+                          (mem_wb_q.d.illegal || mem_wb_q.d.halt || mem_wb_q.d.mret));
 
   // --------------------------------------------------------------------------
   // Pipeline next-state logic
@@ -307,7 +332,8 @@ module cpu_core
       ex_mem_n.valid      = id_ex_q.valid;
       ex_mem_n.pc         = id_ex_q.pc;
       ex_mem_n.instr      = id_ex_q.instr;
-      ex_mem_n.alu_result = alu_result;
+      ex_mem_n.alu_result = ex_result;
+      ex_mem_n.csr_old = csr_old;
       ex_mem_n.rs2_data   = ex_rs2_data;
       ex_mem_n.rs2_addr   = id_ex_q.rs2_addr;
       ex_mem_n.rd_addr    = id_ex_q.rd_addr;
@@ -320,6 +346,7 @@ module cpu_core
       mem_wb_n.alu_result = ex_mem_q.alu_result;
       mem_wb_n.load_data  = mem_load_data_q;
       mem_wb_n.rd_addr    = ex_mem_q.rd_addr;
+      mem_wb_n.csr_old   = ex_mem_q.csr_old;
       mem_wb_n.d          = ex_mem_q.d;
 
       if (ex_redirect) begin
@@ -356,6 +383,8 @@ module cpu_core
       mem_wb_q        <= '0;
       halted_q        <= 1'b0;
       trap_illegal_q  <= 1'b0;
+      mtvec_q <= TRAP_VECTOR; mepc_q <= 32'b0; mcause_q <= 32'b0;
+      interrupt_taken_q <= 1'b0;
       fetch_pending_q <= 1'b0;
       fetch_kill_q    <= 1'b0;
       fetch_hold_q    <= 1'b0;
@@ -367,11 +396,20 @@ module cpu_core
       mem_error_q     <= 1'b0;
       mem_load_data_q <= '0;
     end else begin
+      interrupt_taken_q <= 1'b0;
       if_id_q  <= if_id_n;
       id_ex_q  <= id_ex_n;
       ex_mem_q <= ex_mem_n;
       mem_wb_q <= mem_wb_n;
 
+      if (mem_wb_q.valid && mem_wb_q.d.csr) begin
+        unique case (mem_wb_q.d.csr_addr)
+          12'h305: mtvec_q <= mem_wb_q.alu_result;
+          12'h341: mepc_q <= mem_wb_q.alu_result;
+          12'h342: mcause_q <= mem_wb_q.alu_result;
+          default: ;
+        endcase
+      end
       if (mem_wb_q.valid &&
           (mem_wb_q.d.halt || mem_wb_q.d.illegal || mem_wb_q.bus_error)) begin
         halted_q       <= 1'b1;
@@ -412,6 +450,15 @@ module cpu_core
       if (dmem_req_fire)
         mem_pending_q <= 1'b1;
 
+      if (irq && !mem_stall && !halted_q) begin
+        pc_q <= mtvec_q;
+        mepc_q <= pc_q;
+        mcause_q <= 32'h8000_000b;
+        if_id_q <= '0; id_ex_q <= '0; ex_mem_q <= '0; mem_wb_q <= '0;
+        fetch_pending_q <= 1'b0; fetch_kill_q <= 1'b0; fetch_hold_q <= 1'b0;
+        mem_pending_q <= 1'b0; mem_done_q <= 1'b1;
+        interrupt_taken_q <= 1'b1;
+      end
       if (dmem_rsp_fire) begin
         mem_pending_q   <= 1'b0;
         mem_done_q      <= 1'b1;
@@ -423,6 +470,7 @@ module cpu_core
 
   assign halted       = halted_q;
   assign trap_illegal = trap_illegal_q;
+  assign interrupt_taken = interrupt_taken_q;
   assign retire       = mem_wb_q.valid && !mem_wb_q.d.halt &&
                         !mem_wb_q.d.illegal && !mem_wb_q.bus_error &&
                         !halted_q;

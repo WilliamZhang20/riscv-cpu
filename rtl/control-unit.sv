@@ -101,7 +101,6 @@ module control_unit
         d.imm_sel = IMM_B;
         d.br_op   = br_op_e'({1'b1, funct3});
         d.rd_we   = 1'b0;
-        // funct3 010 and 011 are reserved in BRANCH.
         d.illegal = (funct3 == 3'b010) || (funct3 == 3'b011);
       end
 
@@ -161,10 +160,16 @@ module control_unit
 
       // -- SYSTEM: baseline handles ECALL/EBREAK as halt ---------------------
       OP_SYSTEM: begin
-        d.rd_we   = 1'b0;
-        d.halt    = (funct3 == F3_PRIV) &&
-                    ((imm12 == SYS_ECALL) || (imm12 == SYS_EBREAK));
-        d.illegal = !d.halt;   // CSR ops arrive with Zicsr
+        d.rd_we = 1'b0;
+        d.csr_funct3 = funct3;
+        d.csr_addr = imm12;
+        d.halt = (funct3 == F3_PRIV) && ((imm12 == SYS_ECALL) || (imm12 == SYS_EBREAK));
+        d.mret = (funct3 == F3_PRIV) && (imm12 == SYS_MRET);
+        d.csr = (funct3 != F3_PRIV);
+        d.wb_sel = WB_CSR;
+        d.rd_we = d.csr && (instr[11:7] != 5'd0);
+        d.imm_sel = ((funct3 == F3_CSRRWI) || (funct3 == F3_CSRRSI) || (funct3 == F3_CSRRCI)) ? IMM_Z : IMM_I;
+        d.illegal = !(d.halt || d.mret || d.csr);
       end
 
       default: begin

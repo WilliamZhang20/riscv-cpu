@@ -12,10 +12,13 @@ endclass
 class coh_seq extends uvm_sequence #(coh_item);
   `uvm_object_utils(coh_seq)
   bit [31:0] base_addr;
+  int unsigned count = 4;
   function new(string name="coh_seq"); super.new(name); endfunction
   task body();
-    coh_item item = coh_item::type_id::create("item");
-    start_item(item); item.addr = base_addr; finish_item(item);
+    for (int i = 0; i < count; i++) begin
+      coh_item item = coh_item::type_id::create($sformatf("item%0d", i));
+      start_item(item); item.addr = base_addr + ((i % 4) * 4); finish_item(item);
+    end
   endtask
 endclass
 
@@ -48,14 +51,16 @@ class coh_monitor extends uvm_monitor;
     super.new(name,parent); ap = new("ap",this);
   endfunction
   task run_phase(uvm_phase phase);
+    bit prev_valid = 1'b0;
     forever begin
       #1;
-      if (vif.inv_valid && vif.inv_ready) begin
+      if (vif.inv_valid && vif.inv_ready && !prev_valid) begin
         coh_item item = coh_item::type_id::create("invalidation");
         item.addr = vif.inv_addr;
         `uvm_info("COH_MON", $sformatf("cache%0d invalidated %08h",source_id,item.addr), UVM_MEDIUM)
         ap.write(item);
       end
+      prev_valid = vif.inv_valid;
     end
   endtask
 endclass
@@ -89,7 +94,7 @@ class coh_scoreboard extends uvm_component;
   endfunction
   function void write(coh_item item); invalidations++; endfunction
   function void check_phase(uvm_phase phase);
-    if (invalidations < 2) `uvm_error("COH_SB",$sformatf("only %0d invalidations observed",invalidations))
+    if (invalidations != 8) `uvm_fatal("COH_SB",$sformatf("expected 8 invalidations, observed %0d",invalidations))
     else `uvm_info("COH_SB",$sformatf("observed %0d invalidations",invalidations),UVM_LOW)
   endfunction
 endclass

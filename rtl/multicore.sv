@@ -6,7 +6,9 @@ module multicore_cpu #(parameter int unsigned NUM_CORES = 2,
     parameter int unsigned LINE_BYTES = 16
 ) (
     input logic clk, input logic rst_n, mem_if.master memory,
+    input logic [NUM_CORES-1:0] irq,
     output logic [NUM_CORES-1:0] halted, output logic [NUM_CORES-1:0] trap_illegal,
+    output logic [NUM_CORES-1:0] interrupt_taken,
     output logic [NUM_CORES-1:0] retire, output logic [31:0] retire_pc [NUM_CORES],
     output logic [31:0] retire_instr [NUM_CORES]
 );
@@ -17,7 +19,7 @@ module multicore_cpu #(parameter int unsigned NUM_CORES = 2,
   coherence_if l1d_coherence [NUM_CORES](clk, rst_n);
 
   generate for (genvar c=0;c<NUM_CORES;c++) begin : g_core
-    cpu_core #(.RESET_PC(RESET_PC)) u_core (.clk(clk),.rst_n(rst_n),.imem(core_imem[c]),.dmem(core_dmem[c]),.halted(halted[c]),.trap_illegal(trap_illegal[c]),.retire(retire[c]),.retire_pc(retire_pc[c]),.retire_instr(retire_instr[c]));
+    cpu_core #(.RESET_PC(RESET_PC)) u_core (.clk(clk),.rst_n(rst_n),.irq(irq[c]),.interrupt_taken(interrupt_taken[c]),.imem(core_imem[c]),.dmem(core_dmem[c]),.halted(halted[c]),.trap_illegal(trap_illegal[c]),.retire(retire[c]),.retire_pc(retire_pc[c]),.retire_instr(retire_instr[c]));
     l1i_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1i (.cpu(core_imem[c]),.memory(fabric_master[2*c]));
     l1d_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1d (.cpu(core_dmem[c]),.memory(fabric_master[2*c+1]),.coherence(l1d_coherence[c]));
   end 

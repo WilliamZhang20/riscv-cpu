@@ -222,6 +222,10 @@ package rv32i_pkg;
     logic                  mem_write;
     wb_sel_e               wb_sel;
     logic                  rd_we;
+    logic                  csr;
+    logic                  mret;
+    logic [2:0]            csr_funct3;
+    logic [11:0]           csr_addr;
     logic                  halt;       // ECALL / EBREAK
     logic [REG_ADDR_W-1:0] rd_addr;
     logic [REG_ADDR_W-1:0] rs1_addr;

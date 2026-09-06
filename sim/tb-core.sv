@@ -37,6 +37,8 @@ module tb_core;
   cpu_core #(.RESET_PC(32'h0000_0000)) dut (
       .clk          (clk),
       .rst_n        (rst_n),
+      .irq          (1'b0),
+      .interrupt_taken (),
       .imem        (core_imem_if),
       .dmem        (core_dmem_if),
       .halted       (halted),

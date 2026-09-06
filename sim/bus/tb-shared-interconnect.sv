@@ -43,7 +43,7 @@ module tb_shared_interconnect;
     end
   endgenerate
 
-  shared_interconnect #(
+  noc_fabric #(
       .NUM_MASTERS (NUM_MASTERS),
       .NUM_SLAVES  (2),
       .SLAVE_BASE  ({32'h0000_0100, 32'h0000_0000}),

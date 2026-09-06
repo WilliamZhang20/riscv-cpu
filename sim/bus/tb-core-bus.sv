@@ -20,6 +20,8 @@ module tb_core_bus;
   cpu_core u_core (
       .clk          (clk),
       .rst_n        (rst_n),
+      .irq          (1'b0),
+      .interrupt_taken (),
       .imem        (core_if[0]),
       .dmem        (core_if[1]),
       .halted      (halted),
