@@ -13,6 +13,7 @@ Will use RV32I ISA, everything coded in SystemVerilog
 - [x] Write-through direct-mapped L1 data cache
 - [x] Shared L2 cache and broadcast-invalidation coherence
 - [x] Parameterized multicore CPU subsystem top
+- [x] Transaction-level NoC fabric (address routing, arbitration, backpressure)
 - [ ] Implement Pipeline Interrupts
 - [ ] Implement an integrated GPU
 - [ ] Connect the CPU and GPU
@@ -30,6 +31,13 @@ committed only after memory acknowledges them. A shared 16 KiB L2 sits below
 the L1 interconnect. Cacheable address parameters provide uncached/MMIO bypass,
 and a separate coherence hub serializes write ownership and broadcasts line
 invalidations between private L1Ds.
+
+The transaction-level NoC is intentionally implemented as the parameterized
+`shared_interconnect` behind `rtl/bus/noc-fabric.sv`. It provides independent
+per-target round-robin arbitration, address-map error responses, one-outstanding
+response ownership, and stable backpressure behavior. A flit-based mesh is not
+part of this CPU milestone; it would add complexity without a traffic workload
+to exercise it.
 
 ```sh
 cd sim && make          # -> tb_core: PASS

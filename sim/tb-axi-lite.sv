@@ -1,6 +1,7 @@
 module axi_lite_mem #(parameter int unsigned WORDS=256)(axi4_lite_if.slave axi);
   logic [31:0] mem [WORDS]; logic aw_hold,w_hold,bvalid_q,rvalid_q; logic [31:0] aw_q,wdata_q,rdata_q; logic [3:0] strb_q; logic [2:0] delay_q;
-  assign axi.awready = !aw_hold && !bvalid_q; assign axi.wready = !w_hold && !bvalid_q;
+  logic delay_w = 1'b0;
+  assign axi.awready = !aw_hold && !bvalid_q; assign axi.wready = !w_hold && !bvalid_q && (!delay_w || aw_hold);
   assign axi.bvalid = bvalid_q; assign axi.bresp = 2'b00;
   assign axi.arready = !rvalid_q && !bvalid_q; assign axi.rvalid = rvalid_q; assign axi.rdata=rdata_q; assign axi.rresp=2'b00;
   always_ff @(posedge axi.clk or negedge axi.rst_n) begin
@@ -39,7 +40,9 @@ module tb_axi_lite;
     mem.req_valid=0; mem.rsp_ready=0; repeat(3) @(posedge clk); rst_n=1;
     access(1,32'h40,32'h11223344,4'hf,rd,err); if(err) $fatal(1,"write error");
     access(0,32'h40,0,4'hf,rd,err); if(err || rd!==32'h11223344) $fatal(1,"read %08h err=%0b",rd,err);
+    slave.delay_w = 1'b1;
     access(1,32'h40,32'h0000aa00,4'b0010,rd,err); access(0,32'h40,0,4'hf,rd,err);
+    slave.delay_w = 1'b0;
     if(err || rd!==32'h1122aa44) $fatal(1,"byte write %08h",rd);
     $display("tb_axi_lite: PASS"); $finish;
   end

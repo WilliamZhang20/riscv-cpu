@@ -9,6 +9,7 @@ make regress    # lint and run all block/integration tests
 make l1i-test   # adversarial standalone L1 instruction-cache test
 make l1d-test   # data-cache policy, subword, and failure-atomicity test
 make coherence-test # two private L1Ds, invalidation, concurrent stores
+make noc-test       # address routing, arbitration, errors, and response stalls
 make multicore-lint # lint the complete N-core composition root
 make trace      # same, plus one line per retired instruction
 make lint       # Verilator lint of the RTL only
