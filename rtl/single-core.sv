@@ -22,7 +22,13 @@ module cpu_core
     output logic interrupt_taken,
     output logic retire,
     output logic [XLEN-1:0] retire_pc,
-    output logic [XLEN-1:0] retire_instr
+    output logic [XLEN-1:0] retire_instr,
+    // Monotonic baseline counters. These are intentionally observational:
+    // they do not participate in pipeline control or memory ordering.
+    output logic [63:0] cycle_count,
+    output logic [63:0] retired_count,
+    output logic [63:0] imem_stall_count,
+    output logic [63:0] dmem_stall_count
 );
 
   typedef struct packed {
@@ -395,7 +401,21 @@ module cpu_core
       mem_done_q      <= 1'b0;
       mem_error_q     <= 1'b0;
       mem_load_data_q <= '0;
+      cycle_count     <= '0;
+      retired_count   <= '0;
+      imem_stall_count <= '0;
+      dmem_stall_count <= '0;
     end else begin
+      cycle_count   <= cycle_count + 64'd1;
+      if (retire)
+        retired_count <= retired_count + 64'd1;
+      // Count cycles in which a request/response is outstanding or the data
+      // pipeline is blocked. These counters describe waiting, not cache hits.
+      if (fetch_pending_q || (imem.rsp_valid && !imem.rsp_ready))
+        imem_stall_count <= imem_stall_count + 64'd1;
+      if (mem_stall)
+        dmem_stall_count <= dmem_stall_count + 64'd1;
+
       interrupt_taken_q <= 1'b0;
       if_id_q  <= if_id_n;
       id_ex_q  <= id_ex_n;

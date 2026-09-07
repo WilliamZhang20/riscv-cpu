@@ -1,5 +1,5 @@
 // ============================================================================
-// Standalone verification for the blocking direct-mapped L1 instruction cache.
+// Standalone verification for the blocking 2-way L1 instruction cache.
 //
 // The downstream model deliberately varies request acceptance and response
 // latency. Directed checks cover line refill, spatial hits, conflict eviction,
@@ -189,11 +189,18 @@ module tb_l1i_cache;
     read_and_check(32'h0000_002C, 3);
     check_read_count(4, "spatial hits");
 
-    // With four sets, +64 bytes aliases the same index and evicts the line.
+    // With two sets, +64 bytes aliases the same set but fits in the second way.
     read_and_check(32'h0000_0064, 0);
     check_read_count(8, "conflict refill");
     read_and_check(32'h0000_0024, 0);
-    check_read_count(12, "conflict eviction");
+    check_read_count(8, "two-way conflict retention");
+    // A third line in the same set now evicts the replacement victim.
+    read_and_check(32'h0000_00A4, 0);
+    check_read_count(12, "third-line conflict refill");
+    read_and_check(32'h0000_0024, 0);
+    check_read_count(12, "recently used line retained");
+    read_and_check(32'h0000_0064, 0);
+    check_read_count(16, "replacement victim eviction");
 
     // Illegal CPU requests fail locally and never touch downstream memory.
     issue_request(32'h0000_0021, 1'b0, 4'b1111);
@@ -202,16 +209,16 @@ module tb_l1i_cache;
     expect_response('0, 1'b1, 0);
     issue_request(32'h0000_0020, 1'b0, 4'b0011);
     expect_response('0, 1'b1, 0);
-    check_read_count(12, "local request validation");
+    check_read_count(16, "local request validation");
 
     // The third beat of this refill fails. The partial line must not install,
     // so retrying the request repeats all three downstream transactions.
     issue_request(32'h0000_00CC, 1'b0, 4'b1111);
     expect_response('0, 1'b1, 2);
-    check_read_count(15, "failed refill");
+    check_read_count(19, "failed refill");
     issue_request(32'h0000_00CC, 1'b0, 4'b1111);
     expect_response('0, 1'b1, 0);
-    check_read_count(18, "failed refill was not installed");
+    check_read_count(22, "failed refill was not installed");
 
     // Reset invalidates a previously hot line.
     rst_n <= 1'b0;

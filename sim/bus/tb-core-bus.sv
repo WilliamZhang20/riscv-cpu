@@ -16,6 +16,7 @@ module tb_core_bus;
 
   logic halted, trap_illegal, retire;
   logic [31:0] retire_pc, retire_instr;
+  logic [63:0] cycle_count, retired_count, imem_stall_count, dmem_stall_count;
 
   cpu_core u_core (
       .clk          (clk),
@@ -28,7 +29,9 @@ module tb_core_bus;
       .trap_illegal (trap_illegal),
       .retire       (retire),
       .retire_pc    (retire_pc),
-      .retire_instr (retire_instr)
+      .retire_instr (retire_instr),
+      .cycle_count (cycle_count), .retired_count (retired_count),
+      .imem_stall_count (imem_stall_count), .dmem_stall_count (dmem_stall_count)
   );
 
   shared_interconnect #(

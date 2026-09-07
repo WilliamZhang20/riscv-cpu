@@ -33,6 +33,7 @@ module tb_core;
   logic retire;
   logic [31:0] retire_pc;
   logic [31:0] retire_instr;
+  logic [63:0] cycle_count, retired_count, imem_stall_count, dmem_stall_count;
 
   cpu_core #(.RESET_PC(32'h0000_0000)) dut (
       .clk          (clk),
@@ -45,7 +46,9 @@ module tb_core;
       .trap_illegal (trap_illegal),
       .retire       (retire),
       .retire_pc    (retire_pc),
-      .retire_instr (retire_instr)
+      .retire_instr (retire_instr),
+      .cycle_count (cycle_count), .retired_count (retired_count),
+      .imem_stall_count (imem_stall_count), .dmem_stall_count (dmem_stall_count)
   );
 
   l1i_cache u_l1i (

@@ -7,12 +7,15 @@ module tb_interrupt;
   mem_if memory_if[1](clk, rst_n);
   logic halted, trap_illegal, interrupt_taken, retire;
   logic [31:0] retire_pc, retire_instr;
+  logic [63:0] cycle_count, retired_count, imem_stall_count, dmem_stall_count;
 
   cpu_core #(.RESET_PC(32'h0), .TRAP_VECTOR(32'h100)) dut (
       .clk(clk), .rst_n(rst_n), .irq(irq), .imem(imem), .dmem(dmem),
       .halted(halted), .trap_illegal(trap_illegal),
       .interrupt_taken(interrupt_taken), .retire(retire),
-      .retire_pc(retire_pc), .retire_instr(retire_instr));
+      .retire_pc(retire_pc), .retire_instr(retire_instr),
+      .cycle_count(cycle_count), .retired_count(retired_count),
+      .imem_stall_count(imem_stall_count), .dmem_stall_count(dmem_stall_count));
   // Use the normal memory path for both instruction and data ports.
   assign fabric_if[0].req_valid = imem.req_valid;
   assign fabric_if[0].req_addr = imem.req_addr;

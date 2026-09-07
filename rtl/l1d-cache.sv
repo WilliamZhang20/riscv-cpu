@@ -1,5 +1,5 @@
 // ============================================================================
-// l1d_cache -- blocking, direct-mapped level-one data cache.
+// l1d_cache -- blocking, 2-way set-associative level-one data cache.
 //
 // Policy:
 //   * read allocate with complete-line refill
@@ -28,9 +28,11 @@ module l1d_cache #(
   localparam int unsigned WORD_BYTES     = DATA_W / 8;
   localparam int unsigned WORDS_PER_LINE = LINE_BYTES / WORD_BYTES;
   localparam int unsigned NUM_LINES      = CACHE_BYTES / LINE_BYTES;
+  localparam int unsigned WAYS           = 2;
+  localparam int unsigned NUM_SETS       = NUM_LINES / WAYS;
   localparam int unsigned OFFSET_W       = $clog2(LINE_BYTES);
   localparam int unsigned WORD_OFF_W     = $clog2(WORDS_PER_LINE);
-  localparam int unsigned INDEX_W        = $clog2(NUM_LINES);
+  localparam int unsigned INDEX_W        = $clog2(NUM_SETS);
   localparam int unsigned TAG_W          = ADDR_W - OFFSET_W - INDEX_W;
 
   typedef enum logic [3:0] {
@@ -48,16 +50,19 @@ module l1d_cache #(
 
   state_e state_q;
 
-  logic [TAG_W-1:0]  tag_array [NUM_LINES];
-  logic              valid_array [NUM_LINES];
-  logic [DATA_W-1:0] data_array [NUM_LINES][WORDS_PER_LINE];
+  logic [TAG_W-1:0]  tag_array [NUM_SETS][WAYS];
+  logic              valid_array [NUM_SETS][WAYS];
+  logic              repl_array [NUM_SETS];
+  logic [DATA_W-1:0] data_array [NUM_SETS][WAYS][WORDS_PER_LINE];
 
   logic [ADDR_W-1:0] request_addr_q;
   logic              request_write_q;
   logic [DATA_W-1:0] request_wdata_q;
   logic [BYTE_LANES-1:0] request_be_q;
   logic [WORD_OFF_W-1:0] refill_word_q;
+  logic                  refill_way_q;
   logic              write_hit_q;
+  logic              access_way_q;
   logic [DATA_W-1:0] response_data_q;
   logic              response_error_q;
 
@@ -66,6 +71,8 @@ module l1d_cache #(
   logic [WORD_OFF_W-1:0] request_word;
   logic [ADDR_W-1:0] line_base;
   logic hit;
+  logic hit_way;
+  logic victim_way;
   logic request_aligned;
   logic request_cacheable;
 
@@ -74,8 +81,14 @@ module l1d_cache #(
   assign request_word  = request_addr_q[OFFSET_W-1:$clog2(WORD_BYTES)];
   assign line_base     = {request_addr_q[ADDR_W-1:OFFSET_W],
                           {OFFSET_W{1'b0}}};
-  assign hit = valid_array[request_index] &&
-               (tag_array[request_index] == request_tag);
+  assign hit = (valid_array[request_index][0] &&
+                (tag_array[request_index][0] == request_tag)) ||
+               (valid_array[request_index][1] &&
+                (tag_array[request_index][1] == request_tag));
+  assign hit_way = valid_array[request_index][0] &&
+                   (tag_array[request_index][0] == request_tag) ? 1'b0 : 1'b1;
+  assign victim_way = !valid_array[request_index][0] ? 1'b0 :
+                      !valid_array[request_index][1] ? 1'b1 : repl_array[request_index];
   /* verilator lint_off UNSIGNED */
   assign request_cacheable = (request_addr_q >= CACHE_BASE) &&
                              (request_addr_q <= CACHE_LIMIT);
@@ -130,19 +143,27 @@ module l1d_cache #(
       request_wdata_q  <= '0;
       request_be_q     <= '0;
       refill_word_q    <= '0;
+      refill_way_q     <= 1'b0;
       write_hit_q      <= 1'b0;
+      access_way_q     <= 1'b0;
       response_data_q  <= '0;
       response_error_q <= 1'b0;
       // Payload arrays intentionally have no reset so they can infer SRAMs.
-      for (int line = 0; line < NUM_LINES; line++)
-        valid_array[line] <= 1'b0;
+      for (int set = 0; set < NUM_SETS; set++) begin
+        repl_array[set] <= 1'b0;
+        for (int way = 0; way < WAYS; way++)
+          valid_array[set][way] <= 1'b0;
+      end
     end else begin
-      if (coherence.inv_valid && coherence.inv_ready &&
-          valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]] &&
-          tag_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]] ==
-              coherence.inv_addr[ADDR_W-1:OFFSET_W + INDEX_W])
-        valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]]
-            <= 1'b0;
+      if (coherence.inv_valid && coherence.inv_ready) begin
+        for (int way = 0; way < WAYS; way++) begin
+          if (valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]][way] &&
+              tag_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]][way] ==
+                  coherence.inv_addr[ADDR_W-1:OFFSET_W + INDEX_W])
+            valid_array[coherence.inv_addr[OFFSET_W + INDEX_W - 1:OFFSET_W]][way]
+                <= 1'b0;
+        end
+      end
 
       unique case (state_q)
         S_IDLE: begin
@@ -167,13 +188,16 @@ module l1d_cache #(
             state_q     <= S_WRITE_REQ;
           end else if (request_write_q) begin
             write_hit_q <= request_cacheable && hit;
+            access_way_q <= hit_way;
             state_q     <= ENABLE_COHERENCE ? S_COH_REQ : S_WRITE_REQ;
           end else if (hit) begin
-            response_data_q  <= data_array[request_index][request_word];
+            response_data_q  <= data_array[request_index][hit_way][request_word];
             response_error_q <= 1'b0;
+            repl_array[request_index] <= ~hit_way;
             state_q          <= S_RESPONSE;
           end else begin
-            valid_array[request_index] <= 1'b0;
+            refill_way_q              <= victim_way;
+            valid_array[request_index][victim_way] <= 1'b0;
             refill_word_q              <= '0;
             state_q                    <= S_REFILL_REQ;
           end
@@ -191,13 +215,14 @@ module l1d_cache #(
               response_error_q <= 1'b1;
               state_q          <= S_RESPONSE;
             end else begin
-              data_array[request_index][refill_word_q] <= memory.rsp_rdata;
+              data_array[request_index][refill_way_q][refill_word_q] <= memory.rsp_rdata;
               if (refill_word_q == request_word)
                 response_data_q <= memory.rsp_rdata;
 
               if (refill_word_q == WORD_OFF_W'(WORDS_PER_LINE - 1)) begin
-                tag_array[request_index]   <= request_tag;
-                valid_array[request_index] <= 1'b1;
+                tag_array[request_index][refill_way_q] <= request_tag;
+                valid_array[request_index][refill_way_q] <= 1'b1;
+                repl_array[request_index] <= ~refill_way_q;
                 response_error_q           <= 1'b0;
                 state_q                    <= S_RESPONSE;
               end else begin
@@ -220,7 +245,7 @@ module l1d_cache #(
             if (!memory.rsp_error && request_write_q && write_hit_q) begin
               for (int byte_lane = 0; byte_lane < BYTE_LANES; byte_lane++) begin
                 if (request_be_q[byte_lane])
-                  data_array[request_index][request_word]
+                  data_array[request_index][access_way_q][request_word]
                             [8*byte_lane +: 8] <=
                       request_wdata_q[8*byte_lane +: 8];
               end
@@ -263,10 +288,12 @@ module l1d_cache #(
       else $fatal(1, "l1d_cache currently requires DATA_W=32");
     assert (CACHE_BYTES >= LINE_BYTES && CACHE_BYTES % LINE_BYTES == 0)
       else $fatal(1, "l1d_cache capacity must contain whole lines");
+    assert (NUM_LINES >= WAYS && NUM_LINES % WAYS == 0)
+      else $fatal(1, "l1d_cache requires at least two lines and an even line count");
     assert (LINE_BYTES >= WORD_BYTES && LINE_BYTES % WORD_BYTES == 0)
       else $fatal(1, "l1d_cache line must contain whole words");
-    assert ((NUM_LINES & (NUM_LINES - 1)) == 0)
-      else $fatal(1, "l1d_cache NUM_LINES must be a power of two");
+    assert ((NUM_SETS & (NUM_SETS - 1)) == 0)
+      else $fatal(1, "l1d_cache NUM_SETS must be a power of two");
     assert ((WORDS_PER_LINE & (WORDS_PER_LINE - 1)) == 0)
       else $fatal(1, "l1d_cache WORDS_PER_LINE must be a power of two");
   end
