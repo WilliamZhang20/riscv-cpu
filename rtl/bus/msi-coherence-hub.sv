@@ -41,6 +41,7 @@ module msi_coherence_hub #(
     assign cache_port[i].grant_data=data_q;
     assign cache_port[i].snoop_valid=(state_q==SNOOP && pending_q[i]);
     assign cache_port[i].snoop_addr=addr_q;
+    assign cache_port[i].snoop_write=write_q;
   end endgenerate
 
   always_comb begin

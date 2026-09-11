@@ -85,6 +85,12 @@ module tb_wb_msi_cache;
     cpu_read1(32'h0000_0100, observed);
     if (observed !== 32'h1234_5678)
       $fatal(1,"dirty cache-to-cache transfer lost data: %h", observed);
+    // Force cache 0 to evict 0x100 after the shared read.  The sole dirty
+    // owner must write it back rather than silently losing the line.
+    cpu_write(1'b0, 32'h0000_0300, 32'habcd_0001);
+    cpu_write(1'b0, 32'h0000_0500, 32'habcd_0002);
+    if (backing[32'h100 >> 2] !== 32'h1234_5678)
+      $fatal(1,"dirty line was lost after shared read/eviction: %h", backing[32'h100 >> 2]);
     $display("tb_wb_msi_cache: PASS (dirty MSI transfer)");
     $finish;
   end

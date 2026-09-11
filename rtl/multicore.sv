@@ -3,7 +3,8 @@
 module multicore_cpu #(parameter int unsigned NUM_CORES = 2,
     parameter logic [31:0] RESET_PC = 32'h0000_0000,
     parameter int unsigned L1_BYTES = 1024, parameter int unsigned L2_BYTES = 16384,
-    parameter int unsigned LINE_BYTES = 16
+    parameter int unsigned LINE_BYTES = 16,
+    parameter bit USE_WB_MSI = 1'b0
 ) (
     input logic clk, input logic rst_n, mem_if.master memory,
     input logic [NUM_CORES-1:0] irq,
@@ -21,15 +22,28 @@ module multicore_cpu #(parameter int unsigned NUM_CORES = 2,
   mem_if core_imem [NUM_CORES](clk, rst_n); mem_if core_dmem [NUM_CORES](clk, rst_n);
   mem_if fabric_master [NUM_MASTERS](clk, rst_n); mem_if l2_port [1](clk, rst_n);
   coherence_if l1d_coherence [NUM_CORES](clk, rst_n);
+  msi_coherence_if #(.LINE_W(LINE_BYTES*8)) l1d_msi [NUM_CORES](clk, rst_n);
 
   generate for (genvar c=0;c<NUM_CORES;c++) begin : g_core
     cpu_core #(.RESET_PC(RESET_PC)) u_core (.clk(clk),.rst_n(rst_n),.irq(irq[c]),.interrupt_taken(interrupt_taken[c]),.imem(core_imem[c]),.dmem(core_dmem[c]),.halted(halted[c]),.trap_illegal(trap_illegal[c]),.retire(retire[c]),.retire_pc(retire_pc[c]),.retire_instr(retire_instr[c]),.cycle_count(cycle_count[c]),.retired_count(retired_count[c]),.imem_stall_count(imem_stall_count[c]),.dmem_stall_count(dmem_stall_count[c]));
     l1i_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1i (.cpu(core_imem[c]),.memory(fabric_master[2*c]));
-    l1d_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1d (.cpu(core_dmem[c]),.memory(fabric_master[2*c+1]),.coherence(l1d_coherence[c]));
+    if (USE_WB_MSI) begin : g_wb_msi
+      wb_msi_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1d
+        (.cpu(core_dmem[c]),.memory(fabric_master[2*c+1]),.coherence(l1d_msi[c]));
+    end else begin : g_write_through
+      l1d_cache #(.CACHE_BYTES(L1_BYTES),.LINE_BYTES(LINE_BYTES)) u_l1d
+        (.cpu(core_dmem[c]),.memory(fabric_master[2*c+1]),.coherence(l1d_coherence[c]));
+    end
   end 
   endgenerate
 
-  coherence_hub #(.NUM_CACHES(NUM_CORES),.LINE_BYTES(LINE_BYTES)) u_coherence (.clk(clk),.rst_n(rst_n),.cache_port(l1d_coherence));
+  if (USE_WB_MSI) begin : g_msi_hub
+    msi_coherence_hub #(.NUM_CACHES(NUM_CORES),.LINE_BYTES(LINE_BYTES)) u_coherence
+      (.clk(clk),.rst_n(rst_n),.cache_port(l1d_msi));
+  end else begin : g_legacy_hub
+    coherence_hub #(.NUM_CACHES(NUM_CORES),.LINE_BYTES(LINE_BYTES)) u_coherence
+      (.clk(clk),.rst_n(rst_n),.cache_port(l1d_coherence));
+  end
   shared_interconnect #(.NUM_MASTERS(NUM_MASTERS),.NUM_SLAVES(1)) u_interconnect (.clk(clk),.rst_n(rst_n),.master_port(fabric_master),.slave_port(l2_port));
   l2_cache #(.CACHE_BYTES(L2_BYTES),.LINE_BYTES(LINE_BYTES)) u_l2 (.upstream(l2_port[0]),.memory(memory));
   

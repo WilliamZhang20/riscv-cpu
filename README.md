@@ -21,7 +21,7 @@ Will use RV32I ISA, everything coded in SystemVerilog
 - [~] Phase 5: connected 2-wide in-order issue slice and full RV32I composition root
 - [ ] Phase 6: renamed out-of-order backend and reorder buffer
 - [ ] Implement Pipeline Interrupts
-- [ ] Implement an integrated GPU
+- [~] Implement primitive integrated GPU renderer
 - [ ] Connect the CPU and GPU
 - [ ] Engineer a "mouse and keyboard" interface
 
@@ -62,9 +62,8 @@ assembler that turns `sim/*.s` into `$readmemh` images. See `sim/README.md`.
 The AXI integration points are `rtl/multicore-axi-lite.sv` and
 `rtl/bus/axi4-if.sv`. The former wraps the complete legacy multicore subsystem
 for FPGA BRAM, SoC interconnect, or AXI GPIO/UART/timer windows. The latter is
-the burst-capable interface used by `rtl/gpu/axi4-read-master.sv` and `rtl/gpu/axi4-gpu-engine.sv`: a useful
-starting point for an iGPU scanout/raster engine to fetch framebuffer,
-texture, or command-stream data. The GPU engine exposes base address at 0x04, beat count at 0x08, start at 0x00, and status at 0x0c. Keep AXI4-Lite for control/status registers;
+the burst-capable interface used by `rtl/gpu/axi4-read-master.sv` and `rtl/gpu/axi4-gpu-engine.sv` for read-side DMA. `rtl/gpu/primitive-gpu-2d.sv` and
+`rtl/gpu/axi4-fill-engine.sv` provide the first rendering path: CPU-programmable solid rectangle fills using AXI4 burst writes. The GPU engine exposes base address at 0x04, beat count at 0x08, start at 0x00, and status at 0x0c. Keep AXI4-Lite for control/status registers;
 use full AXI4 for high-bandwidth GPU traffic and future cache refills.
 
 Phase 3 now has `tagged_mem_if`, compatibility bridges, `mshr_table`, and an

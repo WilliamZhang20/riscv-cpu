@@ -1,0 +1,98 @@
+module tb_primitive_gpu_2d;
+  logic clk = 0, rst_n = 0;
+  axi4_lite_if ctrl(clk, rst_n);
+  axi4_if data_axi(clk, rst_n);
+  logic busy, done, error;
+  logic aw_pending, bvalid;
+  logic [31:0] awaddr;
+  logic [7:0] awlen, wbeat;
+  logic [31:0] framebuffer [256];
+  integer ppm;
+
+  always #5 clk = ~clk;
+  primitive_gpu_2d #(.MAX_BURST_BEATS(4)) dut (
+      .ctrl(ctrl), .data_axi(data_axi), .busy(busy), .done(done), .error(error));
+
+  assign data_axi.awready = !aw_pending && !bvalid;
+  assign data_axi.wready = aw_pending && !bvalid;
+  assign data_axi.bvalid = bvalid;
+  assign data_axi.bid = '0;
+  assign data_axi.bresp = 2'b00;
+  assign data_axi.arready = 1'b0;
+  assign data_axi.rvalid = 1'b0;
+  assign data_axi.rid = '0;
+  assign data_axi.rdata = '0;
+  assign data_axi.rresp = 2'b00;
+  assign data_axi.rlast = 1'b0;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      aw_pending <= 1'b0; bvalid <= 1'b0; awaddr <= '0;
+      awlen <= '0; wbeat <= '0;
+      for (int i = 0; i < 256; i++) framebuffer[i] <= 32'hDEAD_BEEF;
+    end else begin
+      if (bvalid && data_axi.bready) bvalid <= 1'b0;
+      if (data_axi.awvalid && data_axi.awready) begin
+        aw_pending <= 1'b1;
+        awaddr <= data_axi.awaddr;
+        awlen <= data_axi.awlen;
+        wbeat <= '0;
+      end
+      if (data_axi.wvalid && data_axi.wready) begin
+        framebuffer[(awaddr >> 2) + 32'(wbeat)] <= data_axi.wdata;
+        if (data_axi.wlast) begin
+          aw_pending <= 1'b0;
+          bvalid <= 1'b1;
+        end else begin
+          wbeat <= wbeat + 1'b1;
+        end
+      end
+    end
+  end
+
+  task automatic lite_write(input logic [31:0] addr, input logic [31:0] value);
+    begin
+      ctrl.awaddr = addr; ctrl.awvalid = 1'b1;
+      ctrl.wdata = value; ctrl.wstrb = 4'b1111; ctrl.wvalid = 1'b1;
+      @(posedge clk);
+      ctrl.awvalid = 1'b0; ctrl.wvalid = 1'b0;
+      do @(posedge clk); while (!ctrl.bvalid);
+      ctrl.bready = 1'b1; @(posedge clk); ctrl.bready = 1'b0;
+    end
+  endtask
+
+  initial begin
+    ctrl.awaddr = '0; ctrl.awvalid = 0; ctrl.wdata = '0;
+    ctrl.wstrb = '0; ctrl.wvalid = 0; ctrl.bready = 0;
+    ctrl.araddr = '0; ctrl.arvalid = 0; ctrl.rready = 0;
+    repeat (2) @(posedge clk);
+    rst_n = 1'b1;
+    lite_write(32'h04, 32'h0000_0100); // framebuffer base
+    lite_write(32'h08, 32'd16);         // stride: four pixels
+    lite_write(32'h0c, {16'd1, 16'd1}); // x=1, y=1
+    lite_write(32'h10, {16'd2, 16'd3}); // height=2, width=3
+    lite_write(32'h14, 32'hAABB_CCDD);
+    // Export the AXI-rendered framebuffer as a terminal-launchable image.
+    int ppm;
+    ppm = $fopen("primitive-gpu-demo.ppm", "w");
+    $fdisplay(ppm, "P3\n4 3\n255");
+    for (int py = 0; py < 3; py++) for (int px = 0; px < 4; px++)
+      $fwrite(ppm, "%0d %0d %0d ", framebuffer[64 + py*4 + px][23:16],
+              framebuffer[64 + py*4 + px][15:8], framebuffer[64 + py*4 + px][7:0]);
+    $fclose(ppm);
+    lite_write(32'h00, 32'd1);
+    wait (done);
+    #1;
+    if (error || busy) $fatal(1, "fill failed: error=%0d busy=%0d", error, busy);
+    for (int i = 0; i < 3; i++) begin
+      if (framebuffer[69+i] !== 32'hAABB_CCDD)
+        $fatal(1, "row 1 pixel %0d incorrect: %h", i, framebuffer[69+i]);
+      if (framebuffer[73+i] !== 32'hAABB_CCDD)
+        $fatal(1, "row 2 pixel %0d incorrect: %h", i, framebuffer[73+i]);
+    end
+    if (framebuffer[68] !== 32'hDEAD_BEEF || framebuffer[72] !== 32'hDEAD_BEEF)
+      $fatal(1, "fill overwrote outside rectangle");
+    $display("tb_primitive_gpu_2d: PASS (3x2 rectangle)");
+    $finish;
+  end
+endmodule

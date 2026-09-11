@@ -10,17 +10,17 @@ interface msi_coherence_if #(
   logic [1:0] grant_state; // 01=S, 10=M
   logic grant_data_valid;
   logic [LINE_W-1:0] grant_data;
-  logic snoop_valid, snoop_ready;
+  logic snoop_valid, snoop_ready, snoop_write;
   logic [ADDR_W-1:0] snoop_addr;
   logic snoop_dirty;
   logic [LINE_W-1:0] snoop_data;
   modport cache(
     input clk,rst_n,acq_ready,grant_valid,grant_state,grant_data_valid,grant_data,
-          snoop_valid,snoop_addr,
+          snoop_valid,snoop_addr,snoop_write,
     output acq_valid,acq_write,acq_addr,grant_ready,snoop_ready,snoop_dirty,snoop_data);
   modport hub(
     input clk,rst_n,acq_valid,acq_write,acq_addr,grant_ready,
           snoop_ready,snoop_dirty,snoop_data,
     output acq_ready,grant_valid,grant_state,grant_data_valid,grant_data,
-           snoop_valid,snoop_addr);
+           snoop_valid,snoop_addr,snoop_write);
 endinterface : msi_coherence_if

@@ -104,7 +104,10 @@ module wb_msi_cache #(
           if (state_line_q[s][w]!=MSI_I &&
               tag_q[s][w]==coherence.snoop_addr[ADDR_W-1 -: TAG_W] &&
               s==int'(coherence.snoop_addr[OFF_W +: SET_W]))
-            state_line_q[s][w]<=MSI_I;
+            // A dirty owner supplies a read grant, but remains responsible
+            // for writeback until a later write acquisition or eviction.
+            if (coherence.snoop_write || state_line_q[s][w] != MSI_M)
+              state_line_q[s][w]<=MSI_I;
       end
       unique case (state_q)
         IDLE: if (cpu.req_valid && cpu.req_ready) begin
