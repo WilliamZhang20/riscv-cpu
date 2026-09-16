@@ -1,4 +1,7 @@
-// Fixed-function AXI4 rectangle fill engine.
+// Fixed-function AXI4 span writer (moved from rtl/gpu/axi4-fill-engine.sv).
+// TODO: rename module axi4_fill_engine -> axi4_span_writer and split rect
+// walk out to rtl/gpu/raster/rect-rasterizer.sv; this keeps rect behavior
+// until the split lands.
 // One accepted command writes width*height constant-color pixels into a
 // linear 32-bit framebuffer, using bounded incrementing write bursts.
 module axi4_fill_engine #(

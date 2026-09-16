@@ -8,7 +8,7 @@ directed and formal-style tests in `sim/`.
 
 Verified on 2026-09-03 with Verilator 5.050 and Accellera UVM 2020.3.1
 (`github.com/accellera-official/uvm-core`), running a full agent against
-`rtl/single-core.sv`:
+`rtl/cpu/core/single-core.sv`:
 
 ```
 UVM_INFO @ 0: reporter [RNTST] Running test core_test...

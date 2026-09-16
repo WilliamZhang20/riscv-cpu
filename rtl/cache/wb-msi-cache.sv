@@ -3,11 +3,13 @@
 // l1d_cache. It supports dirty eviction and cache-to-cache dirty-line grants.
 module wb_msi_cache #(
     parameter int unsigned ADDR_W=32, parameter int unsigned DATA_W=32,
-    parameter int unsigned CACHE_BYTES=1024, parameter int unsigned LINE_BYTES=16
+    parameter int unsigned CACHE_BYTES=1024, parameter int unsigned LINE_BYTES=16,
+    parameter logic [ADDR_W-1:0] CACHE_BASE = 32'h0000_0000,
+    parameter logic [ADDR_W-1:0] CACHE_LIMIT = 32'h7FFF_FFFF
 ) (
     mem_if.slave cpu, mem_if.master memory,
     msi_coherence_if.cache coherence
-);
+    );
   localparam int unsigned WORD_BYTES=DATA_W/8;
   localparam int unsigned WORDS=LINE_BYTES/WORD_BYTES;
   localparam int unsigned LINES=CACHE_BYTES/LINE_BYTES;
@@ -20,7 +22,7 @@ module wb_msi_cache #(
   localparam int unsigned LINE_W=LINE_BYTES*8;
   typedef enum logic [3:0] {IDLE,LOOKUP,EVICT_REQ,EVICT_RSP,ACQ,WAIT_GRANT,
                             REFILL_REQ,REFILL_RSP,WRITE_REQ,WRITE_RSP,RESP,
-                            AFTER_GRANT} state_t;
+                            AFTER_GRANT,UNC_REQ,UNC_RSP} state_t;
   typedef enum logic [1:0] {MSI_I=2'b00,MSI_S=2'b01,MSI_M=2'b10} msi_state_t;
   state_t state_q;
   logic [TAG_W-1:0] tag_q[SETS][WAYS];
@@ -41,6 +43,14 @@ module wb_msi_cache #(
   logic [DATA_W-1:0] rsp_data_q;
   logic rsp_error_q;
   logic grant_data_pending_q;
+  logic req_cacheable;
+
+  /* verilator lint_off UNSIGNED */
+  /* verilator lint_off CMPCONST */
+  assign req_cacheable = (req_addr_q >= CACHE_BASE) &&
+                         (req_addr_q <= CACHE_LIMIT);
+  /* verilator lint_on CMPCONST */
+  /* verilator lint_on UNSIGNED */
 
   assign req_set=req_addr_q[OFF_W +: SET_W];
   assign req_tag=req_addr_q[ADDR_W-1 -: TAG_W];
@@ -58,17 +68,18 @@ module wb_msi_cache #(
   assign cpu.rsp_rdata=rsp_data_q;
   assign cpu.rsp_error=rsp_error_q;
 
-  assign memory.req_valid=(state_q==EVICT_REQ)||(state_q==REFILL_REQ)||(state_q==WRITE_REQ);
+  assign memory.req_valid=(state_q==EVICT_REQ)||(state_q==REFILL_REQ)||(state_q==WRITE_REQ)||(state_q==UNC_REQ);
   assign memory.req_addr=(state_q==EVICT_REQ) ?
       {victim_tag,req_set,{OFF_W{1'b0}}}+ADDR_W'(beat_q*WORD_BYTES) :
       (state_q==REFILL_REQ) ?
       {req_addr_q[ADDR_W-1:OFF_W],{OFF_W{1'b0}}}+ADDR_W'(beat_q*WORD_BYTES) :
       req_addr_q;
-  assign memory.req_write=(state_q==EVICT_REQ)||(state_q==WRITE_REQ);
+  assign memory.req_write=(state_q==EVICT_REQ)||(state_q==WRITE_REQ)||
+      ((state_q==UNC_REQ) && req_write_q);
   assign memory.req_wdata=(state_q==EVICT_REQ) ?
       line_q[victim_set][victim_way][beat_q*DATA_W +: DATA_W] : req_wdata_q;
   assign memory.req_be=(state_q==EVICT_REQ)?{DATA_W/8{1'b1}}:req_be_q;
-  assign memory.rsp_ready=(state_q==EVICT_RSP)||(state_q==REFILL_RSP)||(state_q==WRITE_RSP);
+  assign memory.rsp_ready=(state_q==EVICT_RSP)||(state_q==REFILL_RSP)||(state_q==WRITE_RSP)||(state_q==UNC_RSP);
 
   assign coherence.acq_valid=(state_q==ACQ);
   assign coherence.acq_addr={req_addr_q[ADDR_W-1:OFF_W],{OFF_W{1'b0}}};
@@ -115,7 +126,10 @@ module wb_msi_cache #(
           req_wdata_q<=cpu.req_wdata; req_be_q<=cpu.req_be; state_q<=LOOKUP;
         end
         LOOKUP: begin
-          if (hit && !req_write_q) begin
+          if (!req_cacheable) begin
+            // MMIO/uncached: single-word pass-through, no allocate, no MSI.
+            state_q<=UNC_REQ;
+          end else if (hit && !req_write_q) begin
             rsp_data_q<=line_q[req_set][hit_way][req_word*DATA_W +: DATA_W];
             rsp_error_q<=0; repl_q[req_set]<=~hit_way; state_q<=RESP;
           end else if (hit && req_write_q && state_line_q[req_set][hit_way]==MSI_M) begin
@@ -161,6 +175,11 @@ module wb_msi_cache #(
           rsp_error_q<=0; repl_q[req_set]<=~access_way_q; state_q<=RESP;
         end
         RESP: if (cpu.rsp_ready) state_q<=IDLE;
+        UNC_REQ: if (memory.req_ready) state_q<=UNC_RSP;
+        UNC_RSP: if (memory.rsp_valid && memory.rsp_ready) begin
+          rsp_data_q<=memory.rsp_rdata; rsp_error_q<=memory.rsp_error;
+          state_q<=RESP;
+        end
         default: state_q<=IDLE;
       endcase
     end

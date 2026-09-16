@@ -1,4 +1,7 @@
-// Initial primitive GPU: CPU-programmable solid rectangle renderer.
+// Canonical GPU top (moved from rtl/gpu/primitive-gpu-2d.sv).
+// TODO: rename module primitive_gpu_2d -> gpu once tb/soc instantiations
+// are updated; rect walk moves to rtl/gpu/raster/rect-rasterizer.sv next.
+// CPU-programmable solid rectangle renderer.
 // AXI4-Lite is the command/configuration plane; AXI4 writes the framebuffer.
 module primitive_gpu_2d #(
     parameter int unsigned ADDR_W = 32,

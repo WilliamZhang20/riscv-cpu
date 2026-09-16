@@ -209,7 +209,11 @@ module dual_issue_rv32i_core
 
   // Release a pair only after all instructions before it have retired.  A
   // dependency deliberately leaves lane 1 in the held pair for the next
-  // cycle; a memory operation releases it only after its response.
+  // cycle; a memory operation releases it only after its response.  A
+  // serial lane 0 (branch/CSR) that does not redirect must likewise hold
+  // lane 1 for the next cycle -- releasing the pair would skip lane 1's
+  // instruction (it lives at pair_pc+4, before pair_pc+8).  A redirecting
+  // lane 0 flushes lane 1, which is off the taken path.
   always_comb begin
     pair_ready = 1'b0;
     if (pair_valid) begin
@@ -217,11 +221,15 @@ module dual_issue_rv32i_core
         pair_ready = 1'b1;
       else if (mem_rsp_fire)
         pair_ready = mem_lane_q;
+      else if (lane1_bad)
+        pair_ready = 1'b1;
       else if (lane0_done_q)
         pair_ready = !lane1_mem;
       else if (lane0_mem)
         pair_ready = 1'b0;
-      else if (lane0_control || lane1_bad || issue1)
+      else if (lane0_serial)
+        pair_ready = redirect_now;
+      else if (issue1)
         pair_ready = 1'b1;
       else if (!same_pair_raw)
         pair_ready = 1'b1;
@@ -248,8 +256,9 @@ module dual_issue_rv32i_core
         lane0_done_q <= 1'b0;
         pc_q <= redirect_now ? redirect_target : pair_pc + 32'd8;
       end
-      if (!lane0_done_q && issue0 && !lane0_mem && !lane0_control &&
-          !issue1 && same_pair_raw)
+      if (!lane0_done_q && issue0 && !lane0_mem && !mem_pending_q &&
+          !redirect_now && !lane1_bad && !issue1 &&
+          (same_pair_raw || lane0_serial))
         lane0_done_q <= 1'b1;
 
       if (mem_req_candidate && dmem.req_valid && dmem.req_ready) begin

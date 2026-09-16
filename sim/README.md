@@ -6,6 +6,7 @@
 cd sim
 make            # assemble test-basic.s, build the DUT, run the testbench
 make regress    # lint and run all block/integration tests
+make soc-test bench-all  # canonical SoC (tb_soc) + HW benchmarks
 make l1i-test   # adversarial standalone L1 instruction-cache test
 make l1d-test   # data-cache policy, subword, and failure-atomicity test
 make coherence-test # two private L1Ds, invalidation, concurrent stores
@@ -27,6 +28,10 @@ never read it.
 |---|---|
 | `Makefile` | build + run; `rv32i-pkg.sv` must be first in the source list |
 | `tb-core.sv` | self-checking core + split L1 caches + interconnect test |
+| `tb-soc.sv` | canonical-SoC + HW-benchmark harness (per-core IPC, GPU status) |
+| `bench-ilp.s` | dual-issue ALU throughput microbenchmark |
+| `bench-dcache-stream.s` | L1/L2/DRAM streaming microbenchmark |
+| `bench-gpu-fill.s` | GPU AXI-burst fill microbenchmark (MMIO + pixel check) |
 | `cache/tb-l1i-cache.sv` | standalone cache refill/backpressure/error test |
 | `cache/tb-l1d-cache.sv` | standalone load/store policy and atomicity test |
 | `cache/tb-coherence.sv` | two-cache visibility and store-serialization test |
