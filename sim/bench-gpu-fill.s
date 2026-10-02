@@ -5,23 +5,24 @@
 # standard pass marker at 0x500. Exercises: MMIO router, AXI4-Lite ctrl,
 # AXI4 burst writes through axi4_to_mem into banked DRAM.
 #
-# Reg map: 00 cmd, 04 base, 08 stride, 0c x/y, 10 w/h, 14 color, 18 status.
+# Reg map: 00 cmd, 04 base, 08 stride, 0c prim(0=rect), 10 v0, 14 v1, 1c color, 20 status.
 start:
     lui x10, 0x80000          # x10 = GPU_BASE 0x8000_0000
     lui x11, 0x1              # x11 = FB base 0x1000
     sw x11, 4(x10)            # base
     addi x12, x0, 16
     sw x12, 8(x10)            # stride = 16 bytes
-    sw x0, 12(x10)            # x=0, y=0
+    sw x0, 12(x10)            # primitive_type = rectangle
+    sw x0, 16(x10)            # v0 x=0, y=0
     lui x13, 0x20
-    addi x13, x13, 4          # 0x20004 = w=4, h=2
-    sw x13, 16(x10)
+    addi x13, x13, 4          # v1 x=4, y=2 -> 4x2 rect
+    sw x13, 20(x10)
     addi x14, x0, 0x7F
-    sw x14, 20(x10)           # color = 0x7F
+    sw x14, 28(x10)           # color = 0x7F
     addi x15, x0, 1
     sw x15, 0(x10)            # start
 poll:
-    lw x16, 24(x10)           # status
+    lw x16, 32(x10)           # status @ 0x20
     andi x17, x16, 2
     beq x17, x0, poll
     andi x17, x16, 4

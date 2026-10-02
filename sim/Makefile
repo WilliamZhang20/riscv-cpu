@@ -64,6 +64,9 @@ SOC_SRCS := $(CPU_DIR)/rv32i-pkg.sv \
         $(BR_DIR)/mem-gpu-mmio-router.sv \
         $(BR_DIR)/axi4-to-mem.sv \
         $(GPU_MEM_DIR)/axi4-span-writer.sv \
+        $(RTL_DIR)/gpu/raster/rect-rasterizer.sv \
+        $(RTL_DIR)/gpu/raster/triangle-setup.sv \
+        $(RTL_DIR)/gpu/raster/triangle-rasterizer.sv \
         $(RTL_DIR)/gpu/gpu.sv \
         $(RTL_DIR)/memory/banked-dram.sv \
         $(DUAL_DIR)/dual-fetch-pair.sv \
@@ -234,11 +237,15 @@ gpu-engine-test:
 	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps --Mdir obj_dir/gpu_engine_tb --top-module tb_axi4_gpu_engine -o tb_axi4_gpu_engine ../rtl/interconnect/interfaces/axi4-lite-if.sv ../rtl/interconnect/interfaces/axi4-if.sv ../rtl/gpu/memory/axi4-read-master.sv ../rtl/gpu/memory/axi4-gpu-engine.sv tb-axi4-gpu-engine.sv
 	./obj_dir/gpu_engine_tb/tb_axi4_gpu_engine
 
+PRIMITIVE_GPU_RTL := ../rtl/interconnect/interfaces/axi4-if.sv ../rtl/interconnect/interfaces/axi4-lite-if.sv \
+	../rtl/gpu/memory/axi4-span-writer.sv ../rtl/gpu/raster/rect-rasterizer.sv \
+	../rtl/gpu/raster/triangle-setup.sv ../rtl/gpu/raster/triangle-rasterizer.sv ../rtl/gpu/gpu.sv
+
 primitive-gpu-lint:
-	$(VERILATOR) --lint-only --assert --timescale 1ns/1ps --top-module primitive_gpu_2d ../rtl/interconnect/interfaces/axi4-if.sv ../rtl/interconnect/interfaces/axi4-lite-if.sv ../rtl/gpu/memory/axi4-span-writer.sv ../rtl/gpu/gpu.sv
+	$(VERILATOR) -Wno-WIDTHEXPAND --lint-only --assert --timescale 1ns/1ps --top-module primitive_gpu_2d $(PRIMITIVE_GPU_RTL)
 
 primitive-gpu-test:
-	$(VERILATOR) --binary --timing --assert --timescale 1ns/1ps --Mdir obj_dir/primitive_gpu_tb --top-module tb_primitive_gpu_2d -o tb_primitive_gpu_2d ../rtl/interconnect/interfaces/axi4-if.sv ../rtl/interconnect/interfaces/axi4-lite-if.sv ../rtl/gpu/memory/axi4-span-writer.sv ../rtl/gpu/gpu.sv tb-primitive-gpu-2d.sv
+	$(VERILATOR) -Wno-WIDTHEXPAND --binary --timing --assert --timescale 1ns/1ps --Mdir obj_dir/primitive_gpu_tb --top-module tb_primitive_gpu_2d -o tb_primitive_gpu_2d $(PRIMITIVE_GPU_RTL) tb-primitive-gpu-2d.sv
 	./obj_dir/primitive_gpu_tb/tb_primitive_gpu_2d
 
 mshr-lint:

@@ -59,9 +59,9 @@ GPU ctrl: AXI4-Lite MMIO window (uncached, via WB-L1 bypass)
 Address map: `0x0000_0000`-`0x7FFF_FFFF` cacheable DRAM;
 `0x8000_0000`-`0x8000_001F` GPU ctrl registers (uncached); the framebuffer
 lives in DRAM (e.g. `0x1000`) and is written by GPU AXI bursts directly.
-Triangle rasterization is deferred; the rect fill path
-(`gpu.sv` + `raster/rect-rasterizer.sv` stub + `memory/axi4-span-writer.sv`)
-is the current rendering engine.
+The GPU splits rasterization from memory: `raster/rect-rasterizer.sv` and
+`raster/triangle-rasterizer.sv` (with `raster/triangle-setup.sv` edge coeffs)
+feed `memory/axi4-span-writer.sv`, orchestrated by `gpu.sv`.
 
 The transaction-level NoC is the parameterized
 `shared_interconnect` behind `rtl/interconnect/noc/noc-fabric.sv`
@@ -94,7 +94,7 @@ perf features (dual issue, WB-MSI, banked DRAM, GPU bursts):
 |---|---|---|
 | `bench-ilp` | dual-issue ALU throughput (independent adds) | ~1557 cycles, IPC ~0.21/core |
 | `bench-dcache-stream` | L1/L2/DRAM streaming (4 passes x 1 KiB) | ~32909 cycles, IPC ~0.22/core |
-| `bench-gpu-fill` | MMIO + GPU AXI-burst 4x2 fill, pixel check | ~1132 cycles, gpu done=1 |
+| `bench-gpu-fill` | MMIO + GPU AXI-burst 4x2 fill, pixel check | ~1190 cycles, gpu done=1 |
 | `test-basic` | RV32I correctness smoke | 3832 cycles, 322 retires |
 
 There is no RISC-V toolchain on this machine, so `sim/asm.py` is a minimal
@@ -107,10 +107,11 @@ wraps the legacy multicore subsystem for FPGA BRAM/SoC windows.
 for read-side DMA; `rtl/interconnect/bridges/axi4-to-mem.sv` converts GPU
 AXI4 bursts back into `mem_if` words toward banked DRAM
 (`rtl/memory/banked-dram.sv`: striped, per-bank latency, parallel banks).
-`rtl/gpu/gpu.sv` and `rtl/gpu/memory/axi4-span-writer.sv` provide the
-rendering path: CPU-programmable solid rectangle fills using AXI4 burst
-writes. The GPU exposes base address at 0x04, stride at 0x08, x/y at 0x0c,
-w/h at 0x10, color at 0x14, start at 0x00, and status at 0x18. Keep AXI4-Lite
+`rtl/gpu/gpu.sv` drives rectangles and integer triangles via the span writer.
+MMIO map: 0x00 command, 0x04 framebuffer base, 0x08 stride, 0x0c primitive
+(0=rect, 1=triangle), 0x10/0x14/0x18 vertices `{y,x}`, 0x1c color, 0x20 status.
+For rectangles, v0 is the origin and v1 is the exclusive corner `(x1,y1)` so
+width=`x1-x0`, height=`y1-y0`. Keep AXI4-Lite
 for control/status registers; use full AXI4 for high-bandwidth GPU traffic
 and future cache refills. The WB-MSI L1 (`rtl/cache/wb-msi-cache.sv`) has an
 uncached/MMIO bypass (same `CACHE_BASE`/`CACHE_LIMIT` convention as the

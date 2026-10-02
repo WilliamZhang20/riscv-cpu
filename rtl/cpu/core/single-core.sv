@@ -158,12 +158,16 @@ module cpu_core
   assign wb_fwd_valid = mem_wb_q.valid && mem_wb_q.d.rd_we &&
                         !mem_wb_q.d.illegal && !mem_wb_q.d.halt &&
                         !mem_wb_q.bus_error && !halted_q;
-  assign ex_mem_fwd_data = (ex_mem_q.d.wb_sel == WB_PC4)
+  // A held consumer resumes only after the load response is captured.
+  assign ex_mem_fwd_data = (ex_mem_q.d.wb_sel == WB_MEM)
+                         ? mem_load_data_q :
+                         (ex_mem_q.d.wb_sel == WB_PC4)
                          ? ex_mem_q.pc + 32'd4 : ex_mem_q.alu_result;
 
   always_comb begin
     ex_rs1_data = id_ex_q.rs1_data;
-    if (ex_mem_q.valid && ex_mem_q.d.rd_we && !ex_mem_q.d.mem_read &&
+    if (ex_mem_q.valid && ex_mem_q.d.rd_we &&
+        (!ex_mem_q.d.mem_read || mem_done_q) &&
         ex_mem_q.rd_addr != '0 && ex_mem_q.rd_addr == id_ex_q.rs1_addr)
       ex_rs1_data = ex_mem_fwd_data;
     else if (wb_fwd_valid && mem_wb_q.rd_addr != '0 &&
@@ -171,7 +175,8 @@ module cpu_core
       ex_rs1_data = rf_wdata;
 
     ex_rs2_data = id_ex_q.rs2_data;
-    if (ex_mem_q.valid && ex_mem_q.d.rd_we && !ex_mem_q.d.mem_read &&
+    if (ex_mem_q.valid && ex_mem_q.d.rd_we &&
+        (!ex_mem_q.d.mem_read || mem_done_q) &&
         ex_mem_q.rd_addr != '0 && ex_mem_q.rd_addr == id_ex_q.rs2_addr)
       ex_rs2_data = ex_mem_fwd_data;
     else if (wb_fwd_valid && mem_wb_q.rd_addr != '0 &&

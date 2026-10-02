@@ -36,7 +36,7 @@ module soc #(
     parameter int unsigned DRAM_READ_LATENCY = 8,
     parameter int unsigned DRAM_WRITE_LATENCY = 4,
     parameter logic [31:0] GPU_BASE = 32'h8000_0000,
-    parameter int unsigned GPU_BYTES = 32
+    parameter int unsigned GPU_BYTES = 64
 ) (
     input logic clk,
     input logic rst_n,
